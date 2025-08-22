@@ -14,7 +14,7 @@ import { Settings } from './settings.js';
 // to avoid circular dependencies.
 interface SandboxCliArgs {
   sandbox?: boolean | string;
-  'sandbox-image'?: string;
+  sandboxImage?: string;
 }
 
 const VALID_SANDBOX_COMMANDS: ReadonlyArray<SandboxConfig['command']> = [
@@ -31,13 +31,13 @@ function getSandboxCommand(
   sandbox?: boolean | string,
 ): SandboxConfig['command'] | '' {
   // If the SANDBOX env var is set, we're already inside the sandbox.
-  if (process.env.SANDBOX) {
+  if (process.env['SANDBOX']) {
     return '';
   }
 
   // note environment variable takes precedence over argument (from command line or settings)
   const environmentConfiguredSandbox =
-    process.env.GEMINI_SANDBOX?.toLowerCase().trim() ?? '';
+    process.env['GEMINI_SANDBOX']?.toLowerCase().trim() ?? '';
   sandbox =
     environmentConfiguredSandbox?.length > 0
       ? environmentConfiguredSandbox
@@ -99,8 +99,8 @@ export async function loadSandboxConfig(
 
   const packageJson = await getPackageJson();
   const image =
-    argv['sandbox-image'] ??
-    process.env.GEMINI_SANDBOX_IMAGE ??
+    argv.sandboxImage ??
+    process.env['GEMINI_SANDBOX_IMAGE'] ??
     packageJson?.config?.sandboxImageUri;
 
   return command && image ? { command, image } : undefined;

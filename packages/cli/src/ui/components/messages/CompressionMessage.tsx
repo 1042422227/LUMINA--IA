@@ -9,13 +9,14 @@ import { Box, Text } from 'ink';
 import { CompressionProps } from '../../types.js';
 import Spinner from 'ink-spinner';
 import { Colors } from '../../colors.js';
+import { SCREEN_READER_MODEL_PREFIX } from '../../constants.js';
 
 export interface CompressionDisplayProps {
   compression: CompressionProps;
 }
 
 /*
- * Compression messages appear when the /compress command is ran, and show a loading spinner
+ * Compression messages appear when the /compress command is run, and show a loading spinner
  * while compression is in progress, followed up by some compression stats.
  */
 export const CompressionMessage: React.FC<CompressionDisplayProps> = ({
@@ -40,6 +41,7 @@ export const CompressionMessage: React.FC<CompressionDisplayProps> = ({
           color={
             compression.isPending ? Colors.AccentPurple : Colors.AccentGreen
           }
+          aria-label={SCREEN_READER_MODEL_PREFIX}
         >
           {text}
         </Text>

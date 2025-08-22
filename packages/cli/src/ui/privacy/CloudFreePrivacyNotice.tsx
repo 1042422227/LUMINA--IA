@@ -10,6 +10,7 @@ import { usePrivacySettings } from '../hooks/usePrivacySettings.js';
 import { CloudPaidPrivacyNotice } from './CloudPaidPrivacyNotice.js';
 import { Config } from '@google/gemini-cli-core';
 import { Colors } from '../colors.js';
+import { useKeypress } from '../hooks/useKeypress.js';
 
 interface CloudFreePrivacyNoticeProps {
   config: Config;
@@ -23,15 +24,27 @@ export const CloudFreePrivacyNotice = ({
   const { privacyState, updateDataCollectionOptIn } =
     usePrivacySettings(config);
 
+  useKeypress(
+    (key) => {
+      if (privacyState.error && key.name === 'escape') {
+        onExit();
+      }
+    },
+    { isActive: true },
+  );
+
   if (privacyState.isLoading) {
     return <Text color={Colors.Gray}>Loading...</Text>;
   }
 
   if (privacyState.error) {
     return (
-      <Text color={Colors.AccentRed}>
-        Error loading Opt-in settings: {privacyState.error}
-      </Text>
+      <Box flexDirection="column" marginY={1}>
+        <Text color={Colors.AccentRed}>
+          Error loading Opt-in settings: {privacyState.error}
+        </Text>
+        <Text color={Colors.Gray}>Press Esc to exit.</Text>
+      </Box>
     );
   }
 

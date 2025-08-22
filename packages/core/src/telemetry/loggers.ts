@@ -12,26 +12,41 @@ import {
   EVENT_API_REQUEST,
   EVENT_API_RESPONSE,
   EVENT_CLI_CONFIG,
+  EVENT_IDE_CONNECTION,
   EVENT_TOOL_CALL,
   EVENT_USER_PROMPT,
+  EVENT_FLASH_FALLBACK,
+  EVENT_NEXT_SPEAKER_CHECK,
   SERVICE_NAME,
+  EVENT_SLASH_COMMAND,
+  EVENT_CHAT_COMPRESSION,
 } from './constants.js';
 import {
   ApiErrorEvent,
   ApiRequestEvent,
   ApiResponseEvent,
+  IdeConnectionEvent,
   StartSessionEvent,
   ToolCallEvent,
   UserPromptEvent,
+  FlashFallbackEvent,
+  NextSpeakerCheckEvent,
+  LoopDetectedEvent,
+  SlashCommandEvent,
+  KittySequenceOverflowEvent,
+  ChatCompressionEvent,
 } from './types.js';
 import {
   recordApiErrorMetrics,
   recordTokenUsageMetrics,
   recordApiResponseMetrics,
   recordToolCallMetrics,
+  recordChatCompressionMetrics,
 } from './metrics.js';
 import { isTelemetrySdkInitialized } from './sdk.js';
+import { uiTelemetryService, UiEvent } from './uiTelemetry.js';
 import { ClearcutLogger } from './clearcut-logger/clearcut-logger.js';
+import { safeJsonStringify } from '../utils/safeJsonStringify.js';
 
 const shouldLogUserPrompts = (config: Config): boolean =>
   config.getTelemetryLogPromptsEnabled();
@@ -64,6 +79,9 @@ export function logCliConfiguration(
     file_filtering_respect_git_ignore: event.file_filtering_respect_git_ignore,
     debug_mode: event.debug_enabled,
     mcp_servers: event.mcp_servers,
+    mcp_servers_count: event.mcp_servers_count,
+    mcp_tools: event.mcp_tools,
+    mcp_tools_count: event.mcp_tools_count,
   };
 
   const logger = logs.getLogger(SERVICE_NAME);
@@ -86,7 +104,7 @@ export function logUserPrompt(config: Config, event: UserPromptEvent): void {
   };
 
   if (shouldLogUserPrompts(config)) {
-    attributes.prompt = event.prompt;
+    attributes['prompt'] = event.prompt;
   }
 
   const logger = logs.getLogger(SERVICE_NAME);
@@ -98,6 +116,12 @@ export function logUserPrompt(config: Config, event: UserPromptEvent): void {
 }
 
 export function logToolCall(config: Config, event: ToolCallEvent): void {
+  const uiEvent = {
+    ...event,
+    'event.name': EVENT_TOOL_CALL,
+    'event.timestamp': new Date().toISOString(),
+  } as UiEvent;
+  uiTelemetryService.addEvent(uiEvent);
   ClearcutLogger.getInstance(config)?.logToolCallEvent(event);
   if (!isTelemetrySdkInitialized()) return;
 
@@ -106,7 +130,7 @@ export function logToolCall(config: Config, event: ToolCallEvent): void {
     ...event,
     'event.name': EVENT_TOOL_CALL,
     'event.timestamp': new Date().toISOString(),
-    function_args: JSON.stringify(event.function_args, null, 2),
+    function_args: safeJsonStringify(event.function_args, 2),
   };
   if (event.error) {
     attributes['error.message'] = event.error;
@@ -127,6 +151,7 @@ export function logToolCall(config: Config, event: ToolCallEvent): void {
     event.duration_ms,
     event.success,
     event.decision,
+    event.tool_type,
   );
 }
 
@@ -149,7 +174,35 @@ export function logApiRequest(config: Config, event: ApiRequestEvent): void {
   logger.emit(logRecord);
 }
 
+export function logFlashFallback(
+  config: Config,
+  event: FlashFallbackEvent,
+): void {
+  ClearcutLogger.getInstance(config)?.logFlashFallbackEvent();
+  if (!isTelemetrySdkInitialized()) return;
+
+  const attributes: LogAttributes = {
+    ...getCommonAttributes(config),
+    ...event,
+    'event.name': EVENT_FLASH_FALLBACK,
+    'event.timestamp': new Date().toISOString(),
+  };
+
+  const logger = logs.getLogger(SERVICE_NAME);
+  const logRecord: LogRecord = {
+    body: `Switching to flash as Fallback.`,
+    attributes,
+  };
+  logger.emit(logRecord);
+}
+
 export function logApiError(config: Config, event: ApiErrorEvent): void {
+  const uiEvent = {
+    ...event,
+    'event.name': EVENT_API_ERROR,
+    'event.timestamp': new Date().toISOString(),
+  } as UiEvent;
+  uiTelemetryService.addEvent(uiEvent);
   ClearcutLogger.getInstance(config)?.logApiErrorEvent(event);
   if (!isTelemetrySdkInitialized()) return;
 
@@ -186,6 +239,12 @@ export function logApiError(config: Config, event: ApiErrorEvent): void {
 }
 
 export function logApiResponse(config: Config, event: ApiResponseEvent): void {
+  const uiEvent = {
+    ...event,
+    'event.name': EVENT_API_RESPONSE,
+    'event.timestamp': new Date().toISOString(),
+  } as UiEvent;
+  uiTelemetryService.addEvent(uiEvent);
   ClearcutLogger.getInstance(config)?.logApiResponseEvent(event);
   if (!isTelemetrySdkInitialized()) return;
   const attributes: LogAttributes = {
@@ -195,7 +254,7 @@ export function logApiResponse(config: Config, event: ApiResponseEvent): void {
     'event.timestamp': new Date().toISOString(),
   };
   if (event.response_text) {
-    attributes.response_text = event.response_text;
+    attributes['response_text'] = event.response_text;
   }
   if (event.error) {
     attributes['error.message'] = event.error;
@@ -243,4 +302,130 @@ export function logApiResponse(config: Config, event: ApiResponseEvent): void {
     'thought',
   );
   recordTokenUsageMetrics(config, event.model, event.tool_token_count, 'tool');
+}
+
+export function logLoopDetected(
+  config: Config,
+  event: LoopDetectedEvent,
+): void {
+  ClearcutLogger.getInstance(config)?.logLoopDetectedEvent(event);
+  if (!isTelemetrySdkInitialized()) return;
+
+  const attributes: LogAttributes = {
+    ...getCommonAttributes(config),
+    ...event,
+  };
+
+  const logger = logs.getLogger(SERVICE_NAME);
+  const logRecord: LogRecord = {
+    body: `Loop detected. Type: ${event.loop_type}.`,
+    attributes,
+  };
+  logger.emit(logRecord);
+}
+
+export function logNextSpeakerCheck(
+  config: Config,
+  event: NextSpeakerCheckEvent,
+): void {
+  ClearcutLogger.getInstance(config)?.logNextSpeakerCheck(event);
+  if (!isTelemetrySdkInitialized()) return;
+
+  const attributes: LogAttributes = {
+    ...getCommonAttributes(config),
+    ...event,
+    'event.name': EVENT_NEXT_SPEAKER_CHECK,
+  };
+
+  const logger = logs.getLogger(SERVICE_NAME);
+  const logRecord: LogRecord = {
+    body: `Next speaker check.`,
+    attributes,
+  };
+  logger.emit(logRecord);
+}
+
+export function logSlashCommand(
+  config: Config,
+  event: SlashCommandEvent,
+): void {
+  ClearcutLogger.getInstance(config)?.logSlashCommandEvent(event);
+  if (!isTelemetrySdkInitialized()) return;
+
+  const attributes: LogAttributes = {
+    ...getCommonAttributes(config),
+    ...event,
+    'event.name': EVENT_SLASH_COMMAND,
+  };
+
+  const logger = logs.getLogger(SERVICE_NAME);
+  const logRecord: LogRecord = {
+    body: `Slash command: ${event.command}.`,
+    attributes,
+  };
+  logger.emit(logRecord);
+}
+
+export function logIdeConnection(
+  config: Config,
+  event: IdeConnectionEvent,
+): void {
+  ClearcutLogger.getInstance(config)?.logIdeConnectionEvent(event);
+  if (!isTelemetrySdkInitialized()) return;
+
+  const attributes: LogAttributes = {
+    ...getCommonAttributes(config),
+    ...event,
+    'event.name': EVENT_IDE_CONNECTION,
+  };
+
+  const logger = logs.getLogger(SERVICE_NAME);
+  const logRecord: LogRecord = {
+    body: `Ide connection. Type: ${event.connection_type}.`,
+    attributes,
+  };
+  logger.emit(logRecord);
+}
+
+export function logChatCompression(
+  config: Config,
+  event: ChatCompressionEvent,
+): void {
+  ClearcutLogger.getInstance(config)?.logChatCompressionEvent(event);
+
+  const attributes: LogAttributes = {
+    ...getCommonAttributes(config),
+    ...event,
+    'event.name': EVENT_CHAT_COMPRESSION,
+  };
+
+  const logger = logs.getLogger(SERVICE_NAME);
+  const logRecord: LogRecord = {
+    body: `Chat compression (Saved ${event.tokens_before - event.tokens_after} tokens)`,
+    attributes,
+  };
+  logger.emit(logRecord);
+
+  recordChatCompressionMetrics(config, {
+    tokens_before: event.tokens_before,
+    tokens_after: event.tokens_after,
+  });
+}
+
+export function logKittySequenceOverflow(
+  config: Config,
+  event: KittySequenceOverflowEvent,
+): void {
+  ClearcutLogger.getInstance(config)?.logKittySequenceOverflowEvent(event);
+  if (!isTelemetrySdkInitialized()) return;
+  const attributes: LogAttributes = {
+    ...getCommonAttributes(config),
+    ...event,
+  };
+  const logger = logs.getLogger(SERVICE_NAME);
+  const logRecord: LogRecord = {
+    body: `Kitty sequence buffer overflow: ${event.sequence_length} bytes`,
+    attributes,
+  };
+  logger.emit(logRecord);
 }

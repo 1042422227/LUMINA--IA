@@ -25,6 +25,10 @@ export {
   logApiRequest,
   logApiError,
   logApiResponse,
+  logFlashFallback,
+  logSlashCommand,
+  logKittySequenceOverflow,
+  logChatCompression,
 } from './loggers.js';
 export {
   StartSessionEvent,
@@ -35,6 +39,14 @@ export {
   ApiErrorEvent,
   ApiResponseEvent,
   TelemetryEvent,
+  FlashFallbackEvent,
+  KittySequenceOverflowEvent,
+  SlashCommandEvent,
+  makeSlashCommandEvent,
+  SlashCommandStatus,
+  ChatCompressionEvent,
+  makeChatCompressionEvent,
 } from './types.js';
 export { SpanStatusCode, ValueType } from '@opentelemetry/api';
 export { SemanticAttributes } from '@opentelemetry/semantic-conventions';
+export * from './uiTelemetry.js';
