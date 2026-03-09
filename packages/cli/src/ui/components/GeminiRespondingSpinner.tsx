@@ -5,11 +5,16 @@
  */
 
 import type React from 'react';
-import { Text } from 'ink';
-import Spinner from 'ink-spinner';
+import { Text, useIsScreenReaderEnabled } from 'ink';
 import type { SpinnerName } from 'cli-spinners';
 import { useStreamingContext } from '../contexts/StreamingContext.js';
 import { StreamingState } from '../types.js';
+import {
+  SCREEN_READER_LOADING,
+  SCREEN_READER_RESPONDING,
+} from '../textConstants.js';
+import { theme } from '../semantic-colors.js';
+import { GeminiSpinner } from './GeminiSpinner.js';
 
 interface GeminiRespondingSpinnerProps {
   /**
@@ -24,11 +29,23 @@ export const GeminiRespondingSpinner: React.FC<
   GeminiRespondingSpinnerProps
 > = ({ nonRespondingDisplay, spinnerType = 'dots' }) => {
   const streamingState = useStreamingContext();
-
+  const isScreenReaderEnabled = useIsScreenReaderEnabled();
   if (streamingState === StreamingState.Responding) {
-    return <Spinner type={spinnerType} />;
-  } else if (nonRespondingDisplay) {
-    return <Text>{nonRespondingDisplay}</Text>;
+    return (
+      <GeminiSpinner
+        spinnerType={spinnerType}
+        altText={SCREEN_READER_RESPONDING}
+      />
+    );
   }
+
+  if (nonRespondingDisplay) {
+    return isScreenReaderEnabled ? (
+      <Text>{SCREEN_READER_LOADING}</Text>
+    ) : (
+      <Text color={theme.text.primary}>{nonRespondingDisplay}</Text>
+    );
+  }
+
   return null;
 };

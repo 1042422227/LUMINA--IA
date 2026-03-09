@@ -5,67 +5,40 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { Settings } from './settingsSchema.js';
-import { SETTINGS_SCHEMA } from './settingsSchema.js';
+import {
+  getSettingsSchema,
+  SETTINGS_SCHEMA_DEFINITIONS,
+  type SettingCollectionDefinition,
+  type SettingDefinition,
+  type Settings,
+  type SettingsSchema,
+} from './settingsSchema.js';
 
 describe('SettingsSchema', () => {
-  describe('SETTINGS_SCHEMA', () => {
+  describe('getSettingsSchema', () => {
     it('should contain all expected top-level settings', () => {
-      const expectedSettings = [
-        'theme',
-        'customThemes',
-        'showMemoryUsage',
-        'usageStatisticsEnabled',
-        'autoConfigureMaxOldSpaceSize',
-        'preferredEditor',
-        'maxSessionTurns',
-        'memoryImportFormat',
-        'memoryDiscoveryMaxDirs',
-        'contextFileName',
-        'vimMode',
-        'ideMode',
-        'accessibility',
-        'checkpointing',
-        'fileFiltering',
-        'disableAutoUpdate',
-        'hideWindowTitle',
-        'hideTips',
-        'hideBanner',
-        'selectedAuthType',
-        'useExternalAuth',
-        'sandbox',
-        'coreTools',
-        'excludeTools',
-        'toolDiscoveryCommand',
-        'toolCallCommand',
-        'mcpServerCommand',
+      const expectedSettings: Array<keyof Settings> = [
         'mcpServers',
-        'allowMCPServers',
-        'excludeMCPServers',
+        'general',
+        'ui',
+        'ide',
+        'privacy',
         'telemetry',
-        'bugCommand',
-        'summarizeToolOutput',
-        'dnsResolutionOrder',
-        'excludedProjectEnvVars',
-        'disableUpdateNag',
-        'includeDirectories',
-        'loadMemoryFromIncludeDirectories',
         'model',
-        'hasSeenIdeIntegrationNudge',
-        'folderTrustFeature',
-        'useRipgrep',
-        'debugKeystrokeLogging',
+        'context',
+        'tools',
+        'mcp',
+        'security',
+        'advanced',
       ];
 
       expectedSettings.forEach((setting) => {
-        expect(
-          SETTINGS_SCHEMA[setting as keyof typeof SETTINGS_SCHEMA],
-        ).toBeDefined();
+        expect(getSettingsSchema()[setting]).toBeDefined();
       });
     });
 
     it('should have correct structure for each setting', () => {
-      Object.entries(SETTINGS_SCHEMA).forEach(([_key, definition]) => {
+      Object.entries(getSettingsSchema()).forEach(([_key, definition]) => {
         expect(definition).toHaveProperty('type');
         expect(definition).toHaveProperty('label');
         expect(definition).toHaveProperty('category');
@@ -79,18 +52,21 @@ describe('SettingsSchema', () => {
     });
 
     it('should have correct nested setting structure', () => {
-      const nestedSettings = [
-        'accessibility',
-        'checkpointing',
-        'fileFiltering',
+      const nestedSettings: Array<keyof Settings> = [
+        'general',
+        'ui',
+        'ide',
+        'privacy',
+        'model',
+        'context',
+        'tools',
+        'mcp',
+        'security',
+        'advanced',
       ];
 
       nestedSettings.forEach((setting) => {
-        const definition = SETTINGS_SCHEMA[
-          setting as keyof typeof SETTINGS_SCHEMA
-        ] as (typeof SETTINGS_SCHEMA)[keyof typeof SETTINGS_SCHEMA] & {
-          properties: unknown;
-        };
+        const definition = getSettingsSchema()[setting] as SettingDefinition;
         expect(definition.type).toBe('object');
         expect(definition.properties).toBeDefined();
         expect(typeof definition.properties).toBe('object');
@@ -99,37 +75,84 @@ describe('SettingsSchema', () => {
 
     it('should have accessibility nested properties', () => {
       expect(
-        SETTINGS_SCHEMA.accessibility.properties?.disableLoadingPhrases,
+        getSettingsSchema().ui?.properties?.accessibility?.properties,
       ).toBeDefined();
       expect(
-        SETTINGS_SCHEMA.accessibility.properties?.disableLoadingPhrases.type,
+        getSettingsSchema().ui?.properties?.accessibility.properties
+          ?.enableLoadingPhrases.type,
       ).toBe('boolean');
     });
 
+    it('should have loadingPhrases enum property', () => {
+      const definition = getSettingsSchema().ui?.properties?.loadingPhrases;
+      expect(definition).toBeDefined();
+      expect(definition?.type).toBe('enum');
+      expect(definition?.default).toBe('tips');
+      expect(definition?.options?.map((o) => o.value)).toEqual([
+        'tips',
+        'witty',
+        'all',
+        'off',
+      ]);
+    });
+
+    it('should have errorVerbosity enum property', () => {
+      const definition = getSettingsSchema().ui?.properties?.errorVerbosity;
+      expect(definition).toBeDefined();
+      expect(definition?.type).toBe('enum');
+      expect(definition?.default).toBe('low');
+      expect(definition?.options?.map((o) => o.value)).toEqual(['low', 'full']);
+    });
+
     it('should have checkpointing nested properties', () => {
-      expect(SETTINGS_SCHEMA.checkpointing.properties?.enabled).toBeDefined();
-      expect(SETTINGS_SCHEMA.checkpointing.properties?.enabled.type).toBe(
-        'boolean',
-      );
+      expect(
+        getSettingsSchema().general?.properties?.checkpointing.properties
+          ?.enabled,
+      ).toBeDefined();
+      expect(
+        getSettingsSchema().general?.properties?.checkpointing.properties
+          ?.enabled.type,
+      ).toBe('boolean');
+    });
+
+    it('should have plan nested properties', () => {
+      expect(
+        getSettingsSchema().general?.properties?.plan?.properties?.directory,
+      ).toBeDefined();
+      expect(
+        getSettingsSchema().general?.properties?.plan?.properties?.directory
+          .type,
+      ).toBe('string');
     });
 
     it('should have fileFiltering nested properties', () => {
       expect(
-        SETTINGS_SCHEMA.fileFiltering.properties?.respectGitIgnore,
+        getSettingsSchema().context.properties.fileFiltering.properties
+          ?.respectGitIgnore,
       ).toBeDefined();
       expect(
-        SETTINGS_SCHEMA.fileFiltering.properties?.respectGeminiIgnore,
+        getSettingsSchema().context.properties.fileFiltering.properties
+          ?.respectGeminiIgnore,
       ).toBeDefined();
       expect(
-        SETTINGS_SCHEMA.fileFiltering.properties?.enableRecursiveFileSearch,
+        getSettingsSchema().context.properties.fileFiltering.properties
+          ?.enableRecursiveFileSearch,
       ).toBeDefined();
+      expect(
+        getSettingsSchema().context.properties.fileFiltering.properties
+          ?.customIgnoreFilePaths,
+      ).toBeDefined();
+      expect(
+        getSettingsSchema().context.properties.fileFiltering.properties
+          ?.customIgnoreFilePaths.type,
+      ).toBe('array');
     });
 
     it('should have unique categories', () => {
       const categories = new Set();
 
       // Collect categories from top-level settings
-      Object.values(SETTINGS_SCHEMA).forEach((definition) => {
+      Object.values(getSettingsSchema()).forEach((definition) => {
         categories.add(definition.category);
         // Also collect from nested properties
         const defWithProps = definition as typeof definition & {
@@ -150,118 +173,384 @@ describe('SettingsSchema', () => {
       expect(categories.size).toBeGreaterThan(0);
       expect(categories).toContain('General');
       expect(categories).toContain('UI');
-      expect(categories).toContain('Mode');
-      expect(categories).toContain('Updates');
-      expect(categories).toContain('Accessibility');
-      expect(categories).toContain('Checkpointing');
-      expect(categories).toContain('File Filtering');
       expect(categories).toContain('Advanced');
     });
 
     it('should have consistent default values for boolean settings', () => {
-      const checkBooleanDefaults = (schema: Record<string, unknown>) => {
-        Object.entries(schema).forEach(
-          ([_key, definition]: [string, unknown]) => {
-            const def = definition as {
-              type?: string;
-              default?: unknown;
-              properties?: Record<string, unknown>;
-            };
-            if (def.type === 'boolean') {
-              // Boolean settings can have boolean or undefined defaults (for optional settings)
-              expect(['boolean', 'undefined']).toContain(typeof def.default);
-            }
-            if (def.properties) {
-              checkBooleanDefaults(def.properties);
-            }
-          },
-        );
+      const checkBooleanDefaults = (schema: SettingsSchema) => {
+        Object.entries(schema).forEach(([, definition]) => {
+          const def = definition;
+          if (def.type === 'boolean') {
+            // Boolean settings can have boolean or undefined defaults (for optional settings)
+            expect(['boolean', 'undefined']).toContain(typeof def.default);
+          }
+          if (def.properties) {
+            checkBooleanDefaults(def.properties);
+          }
+        });
       };
 
-      checkBooleanDefaults(SETTINGS_SCHEMA as Record<string, unknown>);
+      checkBooleanDefaults(getSettingsSchema() as SettingsSchema);
     });
 
     it('should have showInDialog property configured', () => {
       // Check that user-facing settings are marked for dialog display
-      expect(SETTINGS_SCHEMA.showMemoryUsage.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.vimMode.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.ideMode.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.disableAutoUpdate.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.hideWindowTitle.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.hideTips.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.hideBanner.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.usageStatisticsEnabled.showInDialog).toBe(false);
-
-      // Check that advanced settings are hidden from dialog
-      expect(SETTINGS_SCHEMA.selectedAuthType.showInDialog).toBe(false);
-      expect(SETTINGS_SCHEMA.coreTools.showInDialog).toBe(false);
-      expect(SETTINGS_SCHEMA.mcpServers.showInDialog).toBe(false);
-      expect(SETTINGS_SCHEMA.telemetry.showInDialog).toBe(false);
-
-      // Check that some settings are appropriately hidden
-      expect(SETTINGS_SCHEMA.theme.showInDialog).toBe(false); // Changed to false
-      expect(SETTINGS_SCHEMA.customThemes.showInDialog).toBe(false); // Managed via theme editor
-      expect(SETTINGS_SCHEMA.checkpointing.showInDialog).toBe(false); // Experimental feature
-      expect(SETTINGS_SCHEMA.accessibility.showInDialog).toBe(false); // Changed to false
-      expect(SETTINGS_SCHEMA.fileFiltering.showInDialog).toBe(false); // Changed to false
-      expect(SETTINGS_SCHEMA.preferredEditor.showInDialog).toBe(false); // Changed to false
-      expect(SETTINGS_SCHEMA.autoConfigureMaxOldSpaceSize.showInDialog).toBe(
+      expect(
+        getSettingsSchema().ui.properties.showMemoryUsage.showInDialog,
+      ).toBe(true);
+      expect(
+        getSettingsSchema().ui.properties.footer.properties
+          .hideContextPercentage.showInDialog,
+      ).toBe(true);
+      expect(getSettingsSchema().general.properties.vimMode.showInDialog).toBe(
         true,
       );
+      expect(getSettingsSchema().ide.properties.enabled.showInDialog).toBe(
+        true,
+      );
+      expect(
+        getSettingsSchema().general.properties.enableAutoUpdate.showInDialog,
+      ).toBe(true);
+      expect(
+        getSettingsSchema().ui.properties.hideWindowTitle.showInDialog,
+      ).toBe(true);
+      expect(getSettingsSchema().ui.properties.hideTips.showInDialog).toBe(
+        true,
+      );
+      expect(
+        getSettingsSchema().ui.properties.showShortcutsHint.showInDialog,
+      ).toBe(true);
+      expect(getSettingsSchema().ui.properties.hideBanner.showInDialog).toBe(
+        true,
+      );
+      expect(
+        getSettingsSchema().privacy.properties.usageStatisticsEnabled
+          .showInDialog,
+      ).toBe(false);
+
+      // Check that advanced settings are hidden from dialog
+      expect(getSettingsSchema().security.properties.auth.showInDialog).toBe(
+        false,
+      );
+      expect(getSettingsSchema().tools.properties.core.showInDialog).toBe(
+        false,
+      );
+      expect(getSettingsSchema().mcpServers.showInDialog).toBe(false);
+      expect(getSettingsSchema().telemetry.showInDialog).toBe(false);
+
+      // Check that some settings are appropriately hidden
+      expect(getSettingsSchema().ui.properties.theme.showInDialog).toBe(false); // Changed to false
+      expect(getSettingsSchema().ui.properties.customThemes.showInDialog).toBe(
+        false,
+      ); // Managed via theme editor
+      expect(
+        getSettingsSchema().general.properties.checkpointing.showInDialog,
+      ).toBe(false); // Experimental feature
+      expect(getSettingsSchema().ui.properties.accessibility.showInDialog).toBe(
+        false,
+      ); // Changed to false
+      expect(
+        getSettingsSchema().context.properties.fileFiltering.showInDialog,
+      ).toBe(false); // Changed to false
+      expect(
+        getSettingsSchema().general.properties.preferredEditor.showInDialog,
+      ).toBe(false); // Changed to false
+      expect(
+        getSettingsSchema().advanced.properties.autoConfigureMemory
+          .showInDialog,
+      ).toBe(true);
     });
 
     it('should infer Settings type correctly', () => {
       // This test ensures that the Settings type is properly inferred from the schema
       const settings: Settings = {
-        theme: 'dark',
-        includeDirectories: ['/path/to/dir'],
-        loadMemoryFromIncludeDirectories: true,
+        ui: {
+          theme: 'dark',
+        },
+        context: {
+          includeDirectories: ['/path/to/dir'],
+          loadMemoryFromIncludeDirectories: true,
+        },
       };
 
       // TypeScript should not complain about these properties
-      expect(settings.theme).toBe('dark');
-      expect(settings.includeDirectories).toEqual(['/path/to/dir']);
-      expect(settings.loadMemoryFromIncludeDirectories).toBe(true);
+      expect(settings.ui?.theme).toBe('dark');
+      expect(settings.context?.includeDirectories).toEqual(['/path/to/dir']);
+      expect(settings.context?.loadMemoryFromIncludeDirectories).toBe(true);
     });
 
     it('should have includeDirectories setting in schema', () => {
-      expect(SETTINGS_SCHEMA.includeDirectories).toBeDefined();
-      expect(SETTINGS_SCHEMA.includeDirectories.type).toBe('array');
-      expect(SETTINGS_SCHEMA.includeDirectories.category).toBe('General');
-      expect(SETTINGS_SCHEMA.includeDirectories.default).toEqual([]);
+      expect(
+        getSettingsSchema().context?.properties.includeDirectories,
+      ).toBeDefined();
+      expect(
+        getSettingsSchema().context?.properties.includeDirectories.type,
+      ).toBe('array');
+      expect(
+        getSettingsSchema().context?.properties.includeDirectories.category,
+      ).toBe('Context');
+      expect(
+        getSettingsSchema().context?.properties.includeDirectories.default,
+      ).toEqual([]);
     });
 
     it('should have loadMemoryFromIncludeDirectories setting in schema', () => {
-      expect(SETTINGS_SCHEMA.loadMemoryFromIncludeDirectories).toBeDefined();
-      expect(SETTINGS_SCHEMA.loadMemoryFromIncludeDirectories.type).toBe(
-        'boolean',
-      );
-      expect(SETTINGS_SCHEMA.loadMemoryFromIncludeDirectories.category).toBe(
-        'General',
-      );
-      expect(SETTINGS_SCHEMA.loadMemoryFromIncludeDirectories.default).toBe(
-        false,
-      );
+      expect(
+        getSettingsSchema().context?.properties
+          .loadMemoryFromIncludeDirectories,
+      ).toBeDefined();
+      expect(
+        getSettingsSchema().context?.properties.loadMemoryFromIncludeDirectories
+          .type,
+      ).toBe('boolean');
+      expect(
+        getSettingsSchema().context?.properties.loadMemoryFromIncludeDirectories
+          .category,
+      ).toBe('Context');
+      expect(
+        getSettingsSchema().context?.properties.loadMemoryFromIncludeDirectories
+          .default,
+      ).toBe(false);
     });
 
     it('should have folderTrustFeature setting in schema', () => {
-      expect(SETTINGS_SCHEMA.folderTrustFeature).toBeDefined();
-      expect(SETTINGS_SCHEMA.folderTrustFeature.type).toBe('boolean');
-      expect(SETTINGS_SCHEMA.folderTrustFeature.category).toBe('General');
-      expect(SETTINGS_SCHEMA.folderTrustFeature.default).toBe(false);
-      expect(SETTINGS_SCHEMA.folderTrustFeature.showInDialog).toBe(true);
+      expect(
+        getSettingsSchema().security.properties.folderTrust.properties.enabled,
+      ).toBeDefined();
+      expect(
+        getSettingsSchema().security.properties.folderTrust.properties.enabled
+          .type,
+      ).toBe('boolean');
+      expect(
+        getSettingsSchema().security.properties.folderTrust.properties.enabled
+          .category,
+      ).toBe('Security');
+      expect(
+        getSettingsSchema().security.properties.folderTrust.properties.enabled
+          .default,
+      ).toBe(true);
+      expect(
+        getSettingsSchema().security.properties.folderTrust.properties.enabled
+          .showInDialog,
+      ).toBe(true);
     });
 
     it('should have debugKeystrokeLogging setting in schema', () => {
-      expect(SETTINGS_SCHEMA.debugKeystrokeLogging).toBeDefined();
-      expect(SETTINGS_SCHEMA.debugKeystrokeLogging.type).toBe('boolean');
-      expect(SETTINGS_SCHEMA.debugKeystrokeLogging.category).toBe('General');
-      expect(SETTINGS_SCHEMA.debugKeystrokeLogging.default).toBe(false);
-      expect(SETTINGS_SCHEMA.debugKeystrokeLogging.requiresRestart).toBe(false);
-      expect(SETTINGS_SCHEMA.debugKeystrokeLogging.showInDialog).toBe(true);
-      expect(SETTINGS_SCHEMA.debugKeystrokeLogging.description).toBe(
-        'Enable debug logging of keystrokes to the console.',
+      expect(
+        getSettingsSchema().general.properties.debugKeystrokeLogging,
+      ).toBeDefined();
+      expect(
+        getSettingsSchema().general.properties.debugKeystrokeLogging.type,
+      ).toBe('boolean');
+      expect(
+        getSettingsSchema().general.properties.debugKeystrokeLogging.category,
+      ).toBe('General');
+      expect(
+        getSettingsSchema().general.properties.debugKeystrokeLogging.default,
+      ).toBe(false);
+      expect(
+        getSettingsSchema().general.properties.debugKeystrokeLogging
+          .requiresRestart,
+      ).toBe(false);
+      expect(
+        getSettingsSchema().general.properties.debugKeystrokeLogging
+          .showInDialog,
+      ).toBe(true);
+      expect(
+        getSettingsSchema().general.properties.debugKeystrokeLogging
+          .description,
+      ).toBe('Enable debug logging of keystrokes to the console.');
+    });
+
+    it('should have showShortcutsHint setting in schema', () => {
+      expect(getSettingsSchema().ui.properties.showShortcutsHint).toBeDefined();
+      expect(getSettingsSchema().ui.properties.showShortcutsHint.type).toBe(
+        'boolean',
       );
+      expect(getSettingsSchema().ui.properties.showShortcutsHint.category).toBe(
+        'UI',
+      );
+      expect(getSettingsSchema().ui.properties.showShortcutsHint.default).toBe(
+        true,
+      );
+      expect(
+        getSettingsSchema().ui.properties.showShortcutsHint.requiresRestart,
+      ).toBe(false);
+      expect(
+        getSettingsSchema().ui.properties.showShortcutsHint.showInDialog,
+      ).toBe(true);
+      expect(
+        getSettingsSchema().ui.properties.showShortcutsHint.description,
+      ).toBe('Show the "? for shortcuts" hint above the input.');
+    });
+
+    it('should have enableNotifications setting in schema', () => {
+      const setting =
+        getSettingsSchema().general.properties.enableNotifications;
+      expect(setting).toBeDefined();
+      expect(setting.type).toBe('boolean');
+      expect(setting.category).toBe('General');
+      expect(setting.default).toBe(false);
+      expect(setting.requiresRestart).toBe(false);
+      expect(setting.showInDialog).toBe(true);
+    });
+
+    it('should have enableAgents setting in schema', () => {
+      const setting = getSettingsSchema().experimental.properties.enableAgents;
+      expect(setting).toBeDefined();
+      expect(setting.type).toBe('boolean');
+      expect(setting.category).toBe('Experimental');
+      expect(setting.default).toBe(false);
+      expect(setting.requiresRestart).toBe(true);
+      expect(setting.showInDialog).toBe(false);
+      expect(setting.description).toBe(
+        'Enable local and remote subagents. Warning: Experimental feature, uses YOLO mode for subagents',
+      );
+    });
+
+    it('should have skills setting enabled by default', () => {
+      const setting = getSettingsSchema().skills.properties.enabled;
+      expect(setting).toBeDefined();
+      expect(setting.type).toBe('boolean');
+      expect(setting.category).toBe('Advanced');
+      expect(setting.default).toBe(true);
+      expect(setting.requiresRestart).toBe(true);
+      expect(setting.showInDialog).toBe(true);
+      expect(setting.description).toBe('Enable Agent Skills.');
+    });
+
+    it('should have plan setting in schema', () => {
+      const setting = getSettingsSchema().experimental.properties.plan;
+      expect(setting).toBeDefined();
+      expect(setting.type).toBe('boolean');
+      expect(setting.category).toBe('Experimental');
+      expect(setting.default).toBe(false);
+      expect(setting.requiresRestart).toBe(true);
+      expect(setting.showInDialog).toBe(true);
+      expect(setting.description).toBe(
+        'Enable planning features (Plan Mode and tools).',
+      );
+    });
+
+    it('should have hooksConfig.notifications setting in schema', () => {
+      const setting = getSettingsSchema().hooksConfig?.properties.notifications;
+      expect(setting).toBeDefined();
+      expect(setting.type).toBe('boolean');
+      expect(setting.category).toBe('Advanced');
+      expect(setting.default).toBe(true);
+      expect(setting.showInDialog).toBe(true);
+    });
+
+    it('should have name and description in hook definitions', () => {
+      const hookDef = SETTINGS_SCHEMA_DEFINITIONS['HookDefinitionArray'];
+      expect(hookDef).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const hookItemProperties = (hookDef as any).items.properties.hooks.items
+        .properties;
+      expect(hookItemProperties.name).toBeDefined();
+      expect(hookItemProperties.name.type).toBe('string');
+      expect(hookItemProperties.description).toBeDefined();
+      expect(hookItemProperties.description.type).toBe('string');
+    });
+
+    it('should have gemmaModelRouter setting in schema', () => {
+      const gemmaModelRouter =
+        getSettingsSchema().experimental.properties.gemmaModelRouter;
+      expect(gemmaModelRouter).toBeDefined();
+      expect(gemmaModelRouter.type).toBe('object');
+      expect(gemmaModelRouter.category).toBe('Experimental');
+      expect(gemmaModelRouter.default).toEqual({});
+      expect(gemmaModelRouter.requiresRestart).toBe(true);
+      expect(gemmaModelRouter.showInDialog).toBe(false);
+      expect(gemmaModelRouter.description).toBe(
+        'Enable Gemma model router (experimental).',
+      );
+
+      const enabled = gemmaModelRouter.properties.enabled;
+      expect(enabled).toBeDefined();
+      expect(enabled.type).toBe('boolean');
+      expect(enabled.category).toBe('Experimental');
+      expect(enabled.default).toBe(false);
+      expect(enabled.requiresRestart).toBe(true);
+      expect(enabled.showInDialog).toBe(false);
+      expect(enabled.description).toBe(
+        'Enable the Gemma Model Router (experimental). Requires a local endpoint serving Gemma via the Gemini API using LiteRT-LM shim.',
+      );
+
+      const classifier = gemmaModelRouter.properties.classifier;
+      expect(classifier).toBeDefined();
+      expect(classifier.type).toBe('object');
+      expect(classifier.category).toBe('Experimental');
+      expect(classifier.default).toEqual({});
+      expect(classifier.requiresRestart).toBe(true);
+      expect(classifier.showInDialog).toBe(false);
+      expect(classifier.description).toBe('Classifier configuration.');
+
+      const host = classifier.properties.host;
+      expect(host).toBeDefined();
+      expect(host.type).toBe('string');
+      expect(host.category).toBe('Experimental');
+      expect(host.default).toBe('http://localhost:9379');
+      expect(host.requiresRestart).toBe(true);
+      expect(host.showInDialog).toBe(false);
+      expect(host.description).toBe('The host of the classifier.');
+
+      const model = classifier.properties.model;
+      expect(model).toBeDefined();
+      expect(model.type).toBe('string');
+      expect(model.category).toBe('Experimental');
+      expect(model.default).toBe('gemma3-1b-gpu-custom');
+      expect(model.requiresRestart).toBe(true);
+      expect(model.showInDialog).toBe(false);
+      expect(model.description).toBe(
+        'The model to use for the classifier. Only tested on `gemma3-1b-gpu-custom`.',
+      );
+    });
+  });
+
+  it('has JSON schema definitions for every referenced ref', () => {
+    const schema = getSettingsSchema();
+    const referenced = new Set<string>();
+
+    const visitDefinition = (definition: SettingDefinition) => {
+      if (definition.ref) {
+        referenced.add(definition.ref);
+        expect(SETTINGS_SCHEMA_DEFINITIONS).toHaveProperty(definition.ref);
+      }
+      if (definition.properties) {
+        Object.values(definition.properties).forEach(visitDefinition);
+      }
+      if (definition.items) {
+        visitCollection(definition.items);
+      }
+      if (definition.additionalProperties) {
+        visitCollection(definition.additionalProperties);
+      }
+    };
+
+    const visitCollection = (collection: SettingCollectionDefinition) => {
+      if (collection.ref) {
+        referenced.add(collection.ref);
+        expect(SETTINGS_SCHEMA_DEFINITIONS).toHaveProperty(collection.ref);
+        return;
+      }
+      if (collection.properties) {
+        Object.values(collection.properties).forEach(visitDefinition);
+      }
+      if (collection.type === 'array' && collection.properties) {
+        Object.values(collection.properties).forEach(visitDefinition);
+      }
+    };
+
+    Object.values(schema).forEach(visitDefinition);
+
+    // Ensure definitions map doesn't accumulate stale entries.
+    Object.keys(SETTINGS_SCHEMA_DEFINITIONS).forEach((key) => {
+      if (!referenced.has(key)) {
+        throw new Error(
+          `Definition "${key}" is exported but never referenced in the schema`,
+        );
+      }
     });
   });
 });

@@ -8,53 +8,95 @@
  * Command enum for all available keyboard shortcuts
  */
 export enum Command {
-  // Basic bindings
-  RETURN = 'return',
-  ESCAPE = 'escape',
+  // Basic Controls
+  RETURN = 'basic.confirm',
+  ESCAPE = 'basic.cancel',
+  QUIT = 'basic.quit',
+  EXIT = 'basic.exit',
 
-  // Cursor movement
-  HOME = 'home',
-  END = 'end',
+  // Cursor Movement
+  HOME = 'cursor.home',
+  END = 'cursor.end',
+  MOVE_UP = 'cursor.up',
+  MOVE_DOWN = 'cursor.down',
+  MOVE_LEFT = 'cursor.left',
+  MOVE_RIGHT = 'cursor.right',
+  MOVE_WORD_LEFT = 'cursor.wordLeft',
+  MOVE_WORD_RIGHT = 'cursor.wordRight',
 
-  // Text deletion
-  KILL_LINE_RIGHT = 'killLineRight',
-  KILL_LINE_LEFT = 'killLineLeft',
-  CLEAR_INPUT = 'clearInput',
+  // Editing
+  KILL_LINE_RIGHT = 'edit.deleteRightAll',
+  KILL_LINE_LEFT = 'edit.deleteLeftAll',
+  CLEAR_INPUT = 'edit.clear',
+  DELETE_WORD_BACKWARD = 'edit.deleteWordLeft',
+  DELETE_WORD_FORWARD = 'edit.deleteWordRight',
+  DELETE_CHAR_LEFT = 'edit.deleteLeft',
+  DELETE_CHAR_RIGHT = 'edit.deleteRight',
+  UNDO = 'edit.undo',
+  REDO = 'edit.redo',
 
-  // Screen control
-  CLEAR_SCREEN = 'clearScreen',
+  // Scrolling
+  SCROLL_UP = 'scroll.up',
+  SCROLL_DOWN = 'scroll.down',
+  SCROLL_HOME = 'scroll.home',
+  SCROLL_END = 'scroll.end',
+  PAGE_UP = 'scroll.pageUp',
+  PAGE_DOWN = 'scroll.pageDown',
 
-  // History navigation
-  HISTORY_UP = 'historyUp',
-  HISTORY_DOWN = 'historyDown',
-  NAVIGATION_UP = 'navigationUp',
-  NAVIGATION_DOWN = 'navigationDown',
+  // History & Search
+  HISTORY_UP = 'history.previous',
+  HISTORY_DOWN = 'history.next',
+  REVERSE_SEARCH = 'history.search.start',
+  SUBMIT_REVERSE_SEARCH = 'history.search.submit',
+  ACCEPT_SUGGESTION_REVERSE_SEARCH = 'history.search.accept',
+  REWIND = 'history.rewind',
 
-  // Auto-completion
-  ACCEPT_SUGGESTION = 'acceptSuggestion',
-  COMPLETION_UP = 'completionUp',
-  COMPLETION_DOWN = 'completionDown',
+  // Navigation
+  NAVIGATION_UP = 'nav.up',
+  NAVIGATION_DOWN = 'nav.down',
+  DIALOG_NAVIGATION_UP = 'nav.dialog.up',
+  DIALOG_NAVIGATION_DOWN = 'nav.dialog.down',
+  DIALOG_NEXT = 'nav.dialog.next',
+  DIALOG_PREV = 'nav.dialog.previous',
 
-  // Text input
-  SUBMIT = 'submit',
-  NEWLINE = 'newline',
+  // Suggestions & Completions
+  ACCEPT_SUGGESTION = 'suggest.accept',
+  COMPLETION_UP = 'suggest.focusPrevious',
+  COMPLETION_DOWN = 'suggest.focusNext',
+  EXPAND_SUGGESTION = 'suggest.expand',
+  COLLAPSE_SUGGESTION = 'suggest.collapse',
 
-  // External tools
-  OPEN_EXTERNAL_EDITOR = 'openExternalEditor',
-  PASTE_CLIPBOARD_IMAGE = 'pasteClipboardImage',
+  // Text Input
+  SUBMIT = 'input.submit',
+  NEWLINE = 'input.newline',
+  OPEN_EXTERNAL_EDITOR = 'input.openExternalEditor',
+  PASTE_CLIPBOARD = 'input.paste',
 
-  // App level bindings
-  SHOW_ERROR_DETAILS = 'showErrorDetails',
-  TOGGLE_TOOL_DESCRIPTIONS = 'toggleToolDescriptions',
-  TOGGLE_IDE_CONTEXT_DETAIL = 'toggleIDEContextDetail',
-  QUIT = 'quit',
-  EXIT = 'exit',
-  SHOW_MORE_LINES = 'showMoreLines',
+  BACKGROUND_SHELL_ESCAPE = 'backgroundShellEscape',
+  BACKGROUND_SHELL_SELECT = 'backgroundShellSelect',
+  TOGGLE_BACKGROUND_SHELL = 'toggleBackgroundShell',
+  TOGGLE_BACKGROUND_SHELL_LIST = 'toggleBackgroundShellList',
+  KILL_BACKGROUND_SHELL = 'backgroundShell.kill',
+  UNFOCUS_BACKGROUND_SHELL = 'backgroundShell.unfocus',
+  UNFOCUS_BACKGROUND_SHELL_LIST = 'backgroundShell.listUnfocus',
+  SHOW_BACKGROUND_SHELL_UNFOCUS_WARNING = 'backgroundShell.unfocusWarning',
+  SHOW_SHELL_INPUT_UNFOCUS_WARNING = 'shellInput.unfocusWarning',
 
-  // Shell commands
-  REVERSE_SEARCH = 'reverseSearch',
-  SUBMIT_REVERSE_SEARCH = 'submitReverseSearch',
-  ACCEPT_SUGGESTION_REVERSE_SEARCH = 'acceptSuggestionReverseSearch',
+  // App Controls
+  SHOW_ERROR_DETAILS = 'app.showErrorDetails',
+  SHOW_FULL_TODOS = 'app.showFullTodos',
+  SHOW_IDE_CONTEXT_DETAIL = 'app.showIdeContextDetail',
+  TOGGLE_MARKDOWN = 'app.toggleMarkdown',
+  TOGGLE_COPY_MODE = 'app.toggleCopyMode',
+  TOGGLE_YOLO = 'app.toggleYolo',
+  CYCLE_APPROVAL_MODE = 'app.cycleApprovalMode',
+  SHOW_MORE_LINES = 'app.showMoreLines',
+  EXPAND_PASTE = 'app.expandPaste',
+  FOCUS_SHELL_INPUT = 'app.focusShellInput',
+  UNFOCUS_SHELL_INPUT = 'app.unfocusShellInput',
+  CLEAR_SCREEN = 'app.clearScreen',
+  RESTART_APP = 'app.restart',
+  SUSPEND_APP = 'app.suspend',
 }
 
 /**
@@ -62,17 +104,15 @@ export enum Command {
  */
 export interface KeyBinding {
   /** The key name (e.g., 'a', 'return', 'tab', 'escape') */
-  key?: string;
-  /** The key sequence (e.g., '\x18' for Ctrl+X) - alternative to key name */
-  sequence?: string;
-  /** Control key requirement: true=must be pressed, false=must not be pressed, undefined=ignore */
-  ctrl?: boolean;
+  key: string;
   /** Shift key requirement: true=must be pressed, false=must not be pressed, undefined=ignore */
   shift?: boolean;
-  /** Command/meta key requirement: true=must be pressed, false=must not be pressed, undefined=ignore */
-  command?: boolean;
-  /** Paste operation requirement: true=must be paste, false=must not be paste, undefined=ignore */
-  paste?: boolean;
+  /** Alt/Option key requirement: true=must be pressed, false=must not be pressed, undefined=ignore */
+  alt?: boolean;
+  /** Control key requirement: true=must be pressed, false=must not be pressed, undefined=ignore */
+  ctrl?: boolean;
+  /** Command/Windows/Super key requirement: true=must be pressed, false=must not be pressed, undefined=ignore */
+  cmd?: boolean;
 }
 
 /**
@@ -87,98 +127,362 @@ export type KeyBindingConfig = {
  * Matches the original hard-coded logic exactly
  */
 export const defaultKeyBindings: KeyBindingConfig = {
-  // Basic bindings
+  // Basic Controls
   [Command.RETURN]: [{ key: 'return' }],
-  // Original: key.name === 'escape'
-  [Command.ESCAPE]: [{ key: 'escape' }],
+  [Command.ESCAPE]: [{ key: 'escape' }, { key: '[', ctrl: true }],
+  [Command.QUIT]: [{ key: 'c', ctrl: true }],
+  [Command.EXIT]: [{ key: 'd', ctrl: true }],
 
-  // Cursor movement
-  // Original: key.ctrl && key.name === 'a'
-  [Command.HOME]: [{ key: 'a', ctrl: true }],
-  // Original: key.ctrl && key.name === 'e'
-  [Command.END]: [{ key: 'e', ctrl: true }],
+  // Cursor Movement
+  [Command.HOME]: [{ key: 'a', ctrl: true }, { key: 'home' }],
+  [Command.END]: [{ key: 'e', ctrl: true }, { key: 'end' }],
+  [Command.MOVE_UP]: [{ key: 'up' }],
+  [Command.MOVE_DOWN]: [{ key: 'down' }],
+  [Command.MOVE_LEFT]: [{ key: 'left' }],
+  [Command.MOVE_RIGHT]: [{ key: 'right' }, { key: 'f', ctrl: true }],
+  [Command.MOVE_WORD_LEFT]: [
+    { key: 'left', ctrl: true },
+    { key: 'left', alt: true },
+    { key: 'b', alt: true },
+  ],
+  [Command.MOVE_WORD_RIGHT]: [
+    { key: 'right', ctrl: true },
+    { key: 'right', alt: true },
+    { key: 'f', alt: true },
+  ],
 
-  // Text deletion
-  // Original: key.ctrl && key.name === 'k'
+  // Editing
   [Command.KILL_LINE_RIGHT]: [{ key: 'k', ctrl: true }],
-  // Original: key.ctrl && key.name === 'u'
   [Command.KILL_LINE_LEFT]: [{ key: 'u', ctrl: true }],
-  // Original: key.ctrl && key.name === 'c'
   [Command.CLEAR_INPUT]: [{ key: 'c', ctrl: true }],
+  [Command.DELETE_WORD_BACKWARD]: [
+    { key: 'backspace', ctrl: true },
+    { key: 'backspace', alt: true },
+    { key: 'w', ctrl: true },
+  ],
+  [Command.DELETE_WORD_FORWARD]: [
+    { key: 'delete', ctrl: true },
+    { key: 'delete', alt: true },
+    { key: 'd', alt: true },
+  ],
+  [Command.DELETE_CHAR_LEFT]: [{ key: 'backspace' }, { key: 'h', ctrl: true }],
+  [Command.DELETE_CHAR_RIGHT]: [{ key: 'delete' }, { key: 'd', ctrl: true }],
+  [Command.UNDO]: [
+    { key: 'z', cmd: true },
+    { key: 'z', alt: true },
+  ],
+  [Command.REDO]: [
+    { key: 'z', ctrl: true, shift: true },
+    { key: 'z', cmd: true, shift: true },
+    { key: 'z', alt: true, shift: true },
+  ],
 
-  // Screen control
-  // Original: key.ctrl && key.name === 'l'
-  [Command.CLEAR_SCREEN]: [{ key: 'l', ctrl: true }],
+  // Scrolling
+  [Command.SCROLL_UP]: [{ key: 'up', shift: true }],
+  [Command.SCROLL_DOWN]: [{ key: 'down', shift: true }],
+  [Command.SCROLL_HOME]: [
+    { key: 'home', ctrl: true },
+    { key: 'home', shift: true },
+  ],
+  [Command.SCROLL_END]: [
+    { key: 'end', ctrl: true },
+    { key: 'end', shift: true },
+  ],
+  [Command.PAGE_UP]: [{ key: 'pageup' }],
+  [Command.PAGE_DOWN]: [{ key: 'pagedown' }],
 
-  // History navigation
-  // Original: key.ctrl && key.name === 'p'
+  // History & Search
   [Command.HISTORY_UP]: [{ key: 'p', ctrl: true }],
-  // Original: key.ctrl && key.name === 'n'
   [Command.HISTORY_DOWN]: [{ key: 'n', ctrl: true }],
-  // Original: key.name === 'up'
-  [Command.NAVIGATION_UP]: [{ key: 'up' }],
-  // Original: key.name === 'down'
-  [Command.NAVIGATION_DOWN]: [{ key: 'down' }],
+  [Command.REVERSE_SEARCH]: [{ key: 'r', ctrl: true }],
+  [Command.REWIND]: [{ key: 'double escape' }], // for documentation only
+  [Command.SUBMIT_REVERSE_SEARCH]: [{ key: 'return' }],
+  [Command.ACCEPT_SUGGESTION_REVERSE_SEARCH]: [{ key: 'tab' }],
 
-  // Auto-completion
-  // Original: key.name === 'tab' || (key.name === 'return' && !key.ctrl)
-  [Command.ACCEPT_SUGGESTION]: [{ key: 'tab' }, { key: 'return', ctrl: false }],
-  // Completion navigation (arrow or Ctrl+P/N)
+  // Navigation
+  [Command.NAVIGATION_UP]: [{ key: 'up' }],
+  [Command.NAVIGATION_DOWN]: [{ key: 'down' }],
+  // Navigation shortcuts appropriate for dialogs where we do not need to accept
+  // text input.
+  [Command.DIALOG_NAVIGATION_UP]: [{ key: 'up' }, { key: 'k' }],
+  [Command.DIALOG_NAVIGATION_DOWN]: [{ key: 'down' }, { key: 'j' }],
+  [Command.DIALOG_NEXT]: [{ key: 'tab' }],
+  [Command.DIALOG_PREV]: [{ key: 'tab', shift: true }],
+
+  // Suggestions & Completions
+  [Command.ACCEPT_SUGGESTION]: [{ key: 'tab' }, { key: 'return' }],
   [Command.COMPLETION_UP]: [{ key: 'up' }, { key: 'p', ctrl: true }],
   [Command.COMPLETION_DOWN]: [{ key: 'down' }, { key: 'n', ctrl: true }],
+  [Command.EXPAND_SUGGESTION]: [{ key: 'right' }],
+  [Command.COLLAPSE_SUGGESTION]: [{ key: 'left' }],
 
-  // Text input
-  // Original: key.name === 'return' && !key.ctrl && !key.meta && !key.paste
+  // Text Input
   // Must also exclude shift to allow shift+enter for newline
-  [Command.SUBMIT]: [
-    {
-      key: 'return',
-      ctrl: false,
-      command: false,
-      paste: false,
-      shift: false,
-    },
-  ],
-  // Original: key.name === 'return' && (key.ctrl || key.meta || key.paste)
-  // Split into multiple data-driven bindings
-  // Now also includes shift+enter for multi-line input
+  [Command.SUBMIT]: [{ key: 'return' }],
   [Command.NEWLINE]: [
     { key: 'return', ctrl: true },
-    { key: 'return', command: true },
-    { key: 'return', paste: true },
+    { key: 'return', cmd: true },
+    { key: 'return', alt: true },
     { key: 'return', shift: true },
     { key: 'j', ctrl: true },
   ],
-
-  // External tools
-  // Original: key.ctrl && (key.name === 'x' || key.sequence === '\x18')
-  [Command.OPEN_EXTERNAL_EDITOR]: [
-    { key: 'x', ctrl: true },
-    { sequence: '\x18', ctrl: true },
+  [Command.OPEN_EXTERNAL_EDITOR]: [{ key: 'x', ctrl: true }],
+  [Command.PASTE_CLIPBOARD]: [
+    { key: 'v', ctrl: true },
+    { key: 'v', cmd: true },
+    { key: 'v', alt: true },
   ],
-  // Original: key.ctrl && key.name === 'v'
-  [Command.PASTE_CLIPBOARD_IMAGE]: [{ key: 'v', ctrl: true }],
 
-  // App level bindings
-  // Original: key.ctrl && key.name === 'o'
-  [Command.SHOW_ERROR_DETAILS]: [{ key: 'o', ctrl: true }],
-  // Original: key.ctrl && key.name === 't'
-  [Command.TOGGLE_TOOL_DESCRIPTIONS]: [{ key: 't', ctrl: true }],
-  // Original: key.ctrl && key.name === 'g'
-  [Command.TOGGLE_IDE_CONTEXT_DETAIL]: [{ key: 'g', ctrl: true }],
-  // Original: key.ctrl && (key.name === 'c' || key.name === 'C')
-  [Command.QUIT]: [{ key: 'c', ctrl: true }],
-  // Original: key.ctrl && (key.name === 'd' || key.name === 'D')
-  [Command.EXIT]: [{ key: 'd', ctrl: true }],
-  // Original: key.ctrl && key.name === 's'
-  [Command.SHOW_MORE_LINES]: [{ key: 's', ctrl: true }],
+  // App Controls
+  [Command.SHOW_ERROR_DETAILS]: [{ key: 'f12' }],
+  [Command.SHOW_FULL_TODOS]: [{ key: 't', ctrl: true }],
+  [Command.SHOW_IDE_CONTEXT_DETAIL]: [{ key: 'g', ctrl: true }],
+  [Command.TOGGLE_MARKDOWN]: [{ key: 'm', alt: true }],
+  [Command.TOGGLE_COPY_MODE]: [{ key: 's', ctrl: true }],
+  [Command.TOGGLE_YOLO]: [{ key: 'y', ctrl: true }],
+  [Command.CYCLE_APPROVAL_MODE]: [{ key: 'tab', shift: true }],
+  [Command.TOGGLE_BACKGROUND_SHELL]: [{ key: 'b', ctrl: true }],
+  [Command.TOGGLE_BACKGROUND_SHELL_LIST]: [{ key: 'l', ctrl: true }],
+  [Command.KILL_BACKGROUND_SHELL]: [{ key: 'k', ctrl: true }],
+  [Command.UNFOCUS_BACKGROUND_SHELL]: [{ key: 'tab', shift: true }],
+  [Command.UNFOCUS_BACKGROUND_SHELL_LIST]: [{ key: 'tab' }],
+  [Command.SHOW_BACKGROUND_SHELL_UNFOCUS_WARNING]: [{ key: 'tab' }],
+  [Command.SHOW_SHELL_INPUT_UNFOCUS_WARNING]: [{ key: 'tab' }],
+  [Command.BACKGROUND_SHELL_SELECT]: [{ key: 'return' }],
+  [Command.BACKGROUND_SHELL_ESCAPE]: [{ key: 'escape' }],
+  [Command.SHOW_MORE_LINES]: [{ key: 'o', ctrl: true }],
+  [Command.EXPAND_PASTE]: [{ key: 'o', ctrl: true }],
+  [Command.FOCUS_SHELL_INPUT]: [{ key: 'tab' }],
+  [Command.UNFOCUS_SHELL_INPUT]: [{ key: 'tab', shift: true }],
+  [Command.CLEAR_SCREEN]: [{ key: 'l', ctrl: true }],
+  [Command.RESTART_APP]: [{ key: 'r' }, { key: 'r', shift: true }],
+  [Command.SUSPEND_APP]: [{ key: 'z', ctrl: true }],
+};
 
-  // Shell commands
-  // Original: key.ctrl && key.name === 'r'
-  [Command.REVERSE_SEARCH]: [{ key: 'r', ctrl: true }],
-  // Original: key.name === 'return' && !key.ctrl
-  // Note: original logic ONLY checked ctrl=false, ignored meta/shift/paste
-  [Command.SUBMIT_REVERSE_SEARCH]: [{ key: 'return', ctrl: false }],
-  // Original: key.name === 'tab'
-  [Command.ACCEPT_SUGGESTION_REVERSE_SEARCH]: [{ key: 'tab' }],
+interface CommandCategory {
+  readonly title: string;
+  readonly commands: readonly Command[];
+}
+
+/**
+ * Presentation metadata for grouping commands in documentation or UI.
+ */
+export const commandCategories: readonly CommandCategory[] = [
+  {
+    title: 'Basic Controls',
+    commands: [Command.RETURN, Command.ESCAPE, Command.QUIT, Command.EXIT],
+  },
+  {
+    title: 'Cursor Movement',
+    commands: [
+      Command.HOME,
+      Command.END,
+      Command.MOVE_UP,
+      Command.MOVE_DOWN,
+      Command.MOVE_LEFT,
+      Command.MOVE_RIGHT,
+      Command.MOVE_WORD_LEFT,
+      Command.MOVE_WORD_RIGHT,
+    ],
+  },
+  {
+    title: 'Editing',
+    commands: [
+      Command.KILL_LINE_RIGHT,
+      Command.KILL_LINE_LEFT,
+      Command.CLEAR_INPUT,
+      Command.DELETE_WORD_BACKWARD,
+      Command.DELETE_WORD_FORWARD,
+      Command.DELETE_CHAR_LEFT,
+      Command.DELETE_CHAR_RIGHT,
+      Command.UNDO,
+      Command.REDO,
+    ],
+  },
+  {
+    title: 'Scrolling',
+    commands: [
+      Command.SCROLL_UP,
+      Command.SCROLL_DOWN,
+      Command.SCROLL_HOME,
+      Command.SCROLL_END,
+      Command.PAGE_UP,
+      Command.PAGE_DOWN,
+    ],
+  },
+  {
+    title: 'History & Search',
+    commands: [
+      Command.HISTORY_UP,
+      Command.HISTORY_DOWN,
+      Command.REVERSE_SEARCH,
+      Command.SUBMIT_REVERSE_SEARCH,
+      Command.ACCEPT_SUGGESTION_REVERSE_SEARCH,
+      Command.REWIND,
+    ],
+  },
+  {
+    title: 'Navigation',
+    commands: [
+      Command.NAVIGATION_UP,
+      Command.NAVIGATION_DOWN,
+      Command.DIALOG_NAVIGATION_UP,
+      Command.DIALOG_NAVIGATION_DOWN,
+      Command.DIALOG_NEXT,
+      Command.DIALOG_PREV,
+    ],
+  },
+  {
+    title: 'Suggestions & Completions',
+    commands: [
+      Command.ACCEPT_SUGGESTION,
+      Command.COMPLETION_UP,
+      Command.COMPLETION_DOWN,
+      Command.EXPAND_SUGGESTION,
+      Command.COLLAPSE_SUGGESTION,
+    ],
+  },
+  {
+    title: 'Text Input',
+    commands: [
+      Command.SUBMIT,
+      Command.NEWLINE,
+      Command.OPEN_EXTERNAL_EDITOR,
+      Command.PASTE_CLIPBOARD,
+    ],
+  },
+  {
+    title: 'App Controls',
+    commands: [
+      Command.SHOW_ERROR_DETAILS,
+      Command.SHOW_FULL_TODOS,
+      Command.SHOW_IDE_CONTEXT_DETAIL,
+      Command.TOGGLE_MARKDOWN,
+      Command.TOGGLE_COPY_MODE,
+      Command.TOGGLE_YOLO,
+      Command.CYCLE_APPROVAL_MODE,
+      Command.SHOW_MORE_LINES,
+      Command.EXPAND_PASTE,
+      Command.TOGGLE_BACKGROUND_SHELL,
+      Command.TOGGLE_BACKGROUND_SHELL_LIST,
+      Command.KILL_BACKGROUND_SHELL,
+      Command.BACKGROUND_SHELL_SELECT,
+      Command.BACKGROUND_SHELL_ESCAPE,
+      Command.UNFOCUS_BACKGROUND_SHELL,
+      Command.UNFOCUS_BACKGROUND_SHELL_LIST,
+      Command.SHOW_BACKGROUND_SHELL_UNFOCUS_WARNING,
+      Command.SHOW_SHELL_INPUT_UNFOCUS_WARNING,
+      Command.FOCUS_SHELL_INPUT,
+      Command.UNFOCUS_SHELL_INPUT,
+      Command.CLEAR_SCREEN,
+      Command.RESTART_APP,
+      Command.SUSPEND_APP,
+    ],
+  },
+];
+
+/**
+ * Human-readable descriptions for each command, used in docs/tooling.
+ */
+export const commandDescriptions: Readonly<Record<Command, string>> = {
+  // Basic Controls
+  [Command.RETURN]: 'Confirm the current selection or choice.',
+  [Command.ESCAPE]: 'Dismiss dialogs or cancel the current focus.',
+  [Command.QUIT]:
+    'Cancel the current request or quit the CLI when input is empty.',
+  [Command.EXIT]: 'Exit the CLI when the input buffer is empty.',
+
+  // Cursor Movement
+  [Command.HOME]: 'Move the cursor to the start of the line.',
+  [Command.END]: 'Move the cursor to the end of the line.',
+  [Command.MOVE_UP]: 'Move the cursor up one line.',
+  [Command.MOVE_DOWN]: 'Move the cursor down one line.',
+  [Command.MOVE_LEFT]: 'Move the cursor one character to the left.',
+  [Command.MOVE_RIGHT]: 'Move the cursor one character to the right.',
+  [Command.MOVE_WORD_LEFT]: 'Move the cursor one word to the left.',
+  [Command.MOVE_WORD_RIGHT]: 'Move the cursor one word to the right.',
+
+  // Editing
+  [Command.KILL_LINE_RIGHT]: 'Delete from the cursor to the end of the line.',
+  [Command.KILL_LINE_LEFT]: 'Delete from the cursor to the start of the line.',
+  [Command.CLEAR_INPUT]: 'Clear all text in the input field.',
+  [Command.DELETE_WORD_BACKWARD]: 'Delete the previous word.',
+  [Command.DELETE_WORD_FORWARD]: 'Delete the next word.',
+  [Command.DELETE_CHAR_LEFT]: 'Delete the character to the left.',
+  [Command.DELETE_CHAR_RIGHT]: 'Delete the character to the right.',
+  [Command.UNDO]: 'Undo the most recent text edit.',
+  [Command.REDO]: 'Redo the most recent undone text edit.',
+
+  // Scrolling
+  [Command.SCROLL_UP]: 'Scroll content up.',
+  [Command.SCROLL_DOWN]: 'Scroll content down.',
+  [Command.SCROLL_HOME]: 'Scroll to the top.',
+  [Command.SCROLL_END]: 'Scroll to the bottom.',
+  [Command.PAGE_UP]: 'Scroll up by one page.',
+  [Command.PAGE_DOWN]: 'Scroll down by one page.',
+
+  // History & Search
+  [Command.HISTORY_UP]: 'Show the previous entry in history.',
+  [Command.HISTORY_DOWN]: 'Show the next entry in history.',
+  [Command.REVERSE_SEARCH]: 'Start reverse search through history.',
+  [Command.SUBMIT_REVERSE_SEARCH]: 'Submit the selected reverse-search match.',
+  [Command.ACCEPT_SUGGESTION_REVERSE_SEARCH]:
+    'Accept a suggestion while reverse searching.',
+  [Command.REWIND]: 'Browse and rewind previous interactions.',
+
+  // Navigation
+  [Command.NAVIGATION_UP]: 'Move selection up in lists.',
+  [Command.NAVIGATION_DOWN]: 'Move selection down in lists.',
+  [Command.DIALOG_NAVIGATION_UP]: 'Move up within dialog options.',
+  [Command.DIALOG_NAVIGATION_DOWN]: 'Move down within dialog options.',
+  [Command.DIALOG_NEXT]: 'Move to the next item or question in a dialog.',
+  [Command.DIALOG_PREV]: 'Move to the previous item or question in a dialog.',
+
+  // Suggestions & Completions
+  [Command.ACCEPT_SUGGESTION]: 'Accept the inline suggestion.',
+  [Command.COMPLETION_UP]: 'Move to the previous completion option.',
+  [Command.COMPLETION_DOWN]: 'Move to the next completion option.',
+  [Command.EXPAND_SUGGESTION]: 'Expand an inline suggestion.',
+  [Command.COLLAPSE_SUGGESTION]: 'Collapse an inline suggestion.',
+
+  // Text Input
+  [Command.SUBMIT]: 'Submit the current prompt.',
+  [Command.NEWLINE]: 'Insert a newline without submitting.',
+  [Command.OPEN_EXTERNAL_EDITOR]:
+    'Open the current prompt or the plan in an external editor.',
+  [Command.PASTE_CLIPBOARD]: 'Paste from the clipboard.',
+
+  // App Controls
+  [Command.SHOW_ERROR_DETAILS]: 'Toggle detailed error information.',
+  [Command.SHOW_FULL_TODOS]: 'Toggle the full TODO list.',
+  [Command.SHOW_IDE_CONTEXT_DETAIL]: 'Show IDE context details.',
+  [Command.TOGGLE_MARKDOWN]: 'Toggle Markdown rendering.',
+  [Command.TOGGLE_COPY_MODE]: 'Toggle copy mode when in alternate buffer mode.',
+  [Command.TOGGLE_YOLO]: 'Toggle YOLO (auto-approval) mode for tool calls.',
+  [Command.CYCLE_APPROVAL_MODE]:
+    'Cycle through approval modes: default (prompt), auto_edit (auto-approve edits), and plan (read-only). Plan mode is skipped when the agent is busy.',
+  [Command.SHOW_MORE_LINES]:
+    'Expand and collapse blocks of content when not in alternate buffer mode.',
+  [Command.EXPAND_PASTE]:
+    'Expand or collapse a paste placeholder when cursor is over placeholder.',
+  [Command.BACKGROUND_SHELL_SELECT]:
+    'Confirm selection in background shell list.',
+  [Command.BACKGROUND_SHELL_ESCAPE]: 'Dismiss background shell list.',
+  [Command.TOGGLE_BACKGROUND_SHELL]:
+    'Toggle current background shell visibility.',
+  [Command.TOGGLE_BACKGROUND_SHELL_LIST]: 'Toggle background shell list.',
+  [Command.KILL_BACKGROUND_SHELL]: 'Kill the active background shell.',
+  [Command.UNFOCUS_BACKGROUND_SHELL]:
+    'Move focus from background shell to Gemini.',
+  [Command.UNFOCUS_BACKGROUND_SHELL_LIST]:
+    'Move focus from background shell list to Gemini.',
+  [Command.SHOW_BACKGROUND_SHELL_UNFOCUS_WARNING]:
+    'Show warning when trying to move focus away from background shell.',
+  [Command.SHOW_SHELL_INPUT_UNFOCUS_WARNING]:
+    'Show warning when trying to move focus away from shell input.',
+  [Command.FOCUS_SHELL_INPUT]: 'Move focus from Gemini to the active shell.',
+  [Command.UNFOCUS_SHELL_INPUT]: 'Move focus from the shell back to Gemini.',
+  [Command.CLEAR_SCREEN]: 'Clear the terminal screen and redraw the UI.',
+  [Command.RESTART_APP]: 'Restart the application.',
+  [Command.SUSPEND_APP]: 'Suspend the CLI and move it to the background.',
 };

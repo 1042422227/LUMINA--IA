@@ -4,20 +4,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/** @vitest-environment jsdom */
-
-import { describe, it, expect } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
+import { renderHookWithProviders } from '../../test-utils/render.js';
 import { useReverseSearchCompletion } from './useReverseSearchCompletion.js';
 import { useTextBuffer } from '../components/shared/text-buffer.js';
 
 describe('useReverseSearchCompletion', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   function useTextBufferForTest(text: string) {
     return useTextBuffer({
       initialText: text,
       initialCursorOffset: text.length,
       viewport: { width: 80, height: 20 },
-      isValidPath: () => false,
       onChange: () => {},
     });
   }
@@ -27,7 +33,7 @@ describe('useReverseSearchCompletion', () => {
       it('should initialize with default state', () => {
         const mockShellHistory = ['echo hello'];
 
-        const { result } = renderHook(() =>
+        const { result } = renderHookWithProviders(() =>
           useReverseSearchCompletion(
             useTextBufferForTest(''),
             mockShellHistory,
@@ -44,7 +50,7 @@ describe('useReverseSearchCompletion', () => {
 
       it('should reset state when reverseSearchActive becomes false', () => {
         const mockShellHistory = ['echo hello'];
-        const { result, rerender } = renderHook(
+        const { result, rerender } = renderHookWithProviders(
           ({ text, active }) => {
             const textBuffer = useTextBufferForTest(text);
             return useReverseSearchCompletion(
@@ -69,7 +75,7 @@ describe('useReverseSearchCompletion', () => {
         it('should handle navigateUp with no suggestions', () => {
           const mockShellHistory = ['echo hello'];
 
-          const { result } = renderHook(() =>
+          const { result } = renderHookWithProviders(() =>
             useReverseSearchCompletion(
               useTextBufferForTest('grep'),
               mockShellHistory,
@@ -86,7 +92,7 @@ describe('useReverseSearchCompletion', () => {
 
         it('should handle navigateDown with no suggestions', () => {
           const mockShellHistory = ['echo hello'];
-          const { result } = renderHook(() =>
+          const { result } = renderHookWithProviders(() =>
             useReverseSearchCompletion(
               useTextBufferForTest('grep'),
               mockShellHistory,
@@ -111,7 +117,7 @@ describe('useReverseSearchCompletion', () => {
             'echo Hi',
           ];
 
-          const { result } = renderHook(() =>
+          const { result } = renderHookWithProviders(() =>
             useReverseSearchCompletion(
               useTextBufferForTest('echo'),
               mockShellHistory,
@@ -138,7 +144,7 @@ describe('useReverseSearchCompletion', () => {
             'echo "Hello, World!"',
             'echo Hi',
           ];
-          const { result } = renderHook(() =>
+          const { result } = renderHookWithProviders(() =>
             useReverseSearchCompletion(
               useTextBufferForTest('ls'),
               mockShellHistory,
@@ -166,7 +172,7 @@ describe('useReverseSearchCompletion', () => {
             'echo "Hi all"',
           ];
 
-          const { result } = renderHook(() =>
+          const { result } = renderHookWithProviders(() =>
             useReverseSearchCompletion(
               useTextBufferForTest('l'),
               mockShellHistory,
@@ -209,7 +215,7 @@ describe('useReverseSearchCompletion', () => {
             (_, i) => `echo ${i}`,
           );
 
-          const { result } = renderHook(() =>
+          const { result } = renderHookWithProviders(() =>
             useReverseSearchCompletion(
               useTextBufferForTest('echo'),
               largeMockCommands,
@@ -235,7 +241,7 @@ describe('useReverseSearchCompletion', () => {
   describe('Filtering', () => {
     it('filters history by buffer.text and sets showSuggestions', () => {
       const history = ['foo', 'barfoo', 'baz'];
-      const { result } = renderHook(() =>
+      const { result } = renderHookWithProviders(() =>
         useReverseSearchCompletion(useTextBufferForTest('foo'), history, true),
       );
 
@@ -249,7 +255,7 @@ describe('useReverseSearchCompletion', () => {
 
     it('hides suggestions when there are no matches', () => {
       const history = ['alpha', 'beta'];
-      const { result } = renderHook(() =>
+      const { result } = renderHookWithProviders(() =>
         useReverseSearchCompletion(useTextBufferForTest('γ'), history, true),
       );
 

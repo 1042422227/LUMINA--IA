@@ -13,44 +13,16 @@ import { Command, defaultKeyBindings } from '../config/keyBindings.js';
  * Pure data-driven matching logic
  */
 function matchKeyBinding(keyBinding: KeyBinding, key: Key): boolean {
-  // Either key name or sequence must match (but not both should be defined)
-  let keyMatches = false;
-
-  if (keyBinding.key !== undefined) {
-    keyMatches = keyBinding.key === key.name;
-  } else if (keyBinding.sequence !== undefined) {
-    keyMatches = keyBinding.sequence === key.sequence;
-  } else {
-    // Neither key nor sequence defined - invalid binding
-    return false;
-  }
-
-  if (!keyMatches) {
-    return false;
-  }
-
-  // Check modifiers - follow original logic:
-  // undefined = ignore this modifier (original behavior)
+  // Check modifiers:
   // true = modifier must be pressed
-  // false = modifier must NOT be pressed
-
-  if (keyBinding.ctrl !== undefined && key.ctrl !== keyBinding.ctrl) {
-    return false;
-  }
-
-  if (keyBinding.shift !== undefined && key.shift !== keyBinding.shift) {
-    return false;
-  }
-
-  if (keyBinding.command !== undefined && key.meta !== keyBinding.command) {
-    return false;
-  }
-
-  if (keyBinding.paste !== undefined && key.paste !== keyBinding.paste) {
-    return false;
-  }
-
-  return true;
+  // false or undefined = modifier must NOT be pressed
+  return (
+    keyBinding.key === key.name &&
+    !!key.shift === !!keyBinding.shift &&
+    !!key.alt === !!keyBinding.alt &&
+    !!key.ctrl === !!keyBinding.ctrl &&
+    !!key.cmd === !!keyBinding.cmd
+  );
 }
 
 /**
@@ -83,6 +55,7 @@ export type KeyMatchers = {
 export function createKeyMatchers(
   config: KeyBindingConfig = defaultKeyBindings,
 ): KeyMatchers {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const matchers = {} as { [C in Command]: KeyMatcher };
 
   for (const command of Object.values(Command)) {

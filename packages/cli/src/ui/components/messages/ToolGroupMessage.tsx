@@ -6,58 +6,129 @@
 
 import type React from 'react';
 import { useMemo } from 'react';
-import { Box } from 'ink';
-import type { IndividualToolCallDisplay } from '../../types.js';
-import { ToolCallStatus } from '../../types.js';
+import { Box, Text } from 'ink';
+import type {
+  HistoryItem,
+  HistoryItemWithoutId,
+  IndividualToolCallDisplay,
+} from '../../types.js';
+import { ToolCallStatus, mapCoreStatusToDisplayStatus } from '../../types.js';
 import { ToolMessage } from './ToolMessage.js';
-import { ToolConfirmationMessage } from './ToolConfirmationMessage.js';
-import { Colors } from '../../colors.js';
-import type { Config } from '@google/gemini-cli-core';
-import { SHELL_COMMAND_NAME } from '../../constants.js';
+import { ShellToolMessage } from './ShellToolMessage.js';
+import { theme } from '../../semantic-colors.js';
+import { useConfig } from '../../contexts/ConfigContext.js';
+import { isShellTool } from './ToolShared.js';
+import {
+  shouldHideToolCall,
+  CoreToolCallStatus,
+} from '@google/gemini-cli-core';
+import { useUIState } from '../../contexts/UIStateContext.js';
+import { getToolGroupBorderAppearance } from '../../utils/borderStyles.js';
+import { useSettings } from '../../contexts/SettingsContext.js';
 
 interface ToolGroupMessageProps {
-  groupId: number;
+  item: HistoryItem | HistoryItemWithoutId;
   toolCalls: IndividualToolCallDisplay[];
   availableTerminalHeight?: number;
   terminalWidth: number;
-  config: Config;
-  isFocused?: boolean;
+  onShellInputSubmit?: (input: string) => void;
+  borderTop?: boolean;
+  borderBottom?: boolean;
+  isExpandable?: boolean;
 }
 
 // Main component renders the border and maps the tools using ToolMessage
+const TOOL_MESSAGE_HORIZONTAL_MARGIN = 4;
+
 export const ToolGroupMessage: React.FC<ToolGroupMessageProps> = ({
-  toolCalls,
+  item,
+  toolCalls: allToolCalls,
   availableTerminalHeight,
   terminalWidth,
-  config,
-  isFocused = true,
+  borderTop: borderTopOverride,
+  borderBottom: borderBottomOverride,
+  isExpandable,
 }) => {
-  const hasPending = !toolCalls.every(
-    (t) => t.status === ToolCallStatus.Success,
+  const settings = useSettings();
+  const isLowErrorVerbosity = settings.merged.ui?.errorVerbosity !== 'full';
+
+  // Filter out tool calls that should be hidden (e.g. in-progress Ask User, or Plan Mode operations).
+  const toolCalls = useMemo(
+    () =>
+      allToolCalls.filter((t) => {
+        if (
+          isLowErrorVerbosity &&
+          t.status === CoreToolCallStatus.Error &&
+          !t.isClientInitiated
+        ) {
+          return false;
+        }
+
+        return !shouldHideToolCall({
+          displayName: t.name,
+          status: t.status,
+          approvalMode: t.approvalMode,
+          hasResultDisplay: !!t.resultDisplay,
+          parentCallId: t.parentCallId,
+        });
+      }),
+    [allToolCalls, isLowErrorVerbosity],
   );
-  const isShellCommand = toolCalls.some((t) => t.name === SHELL_COMMAND_NAME);
-  const borderColor =
-    hasPending || isShellCommand ? Colors.AccentYellow : Colors.Gray;
 
-  const staticHeight = /* border */ 2 + /* marginBottom */ 1;
-  // This is a bit of a magic number, but it accounts for the border and
-  // marginLeft.
-  const innerWidth = terminalWidth - 4;
+  const config = useConfig();
+  const {
+    activePtyId,
+    embeddedShellFocused,
+    backgroundShells,
+    pendingHistoryItems,
+  } = useUIState();
 
-  // only prompt for tool approval on the first 'confirming' tool in the list
-  // note, after the CTA, this automatically moves over to the next 'confirming' tool
-  const toolAwaitingApproval = useMemo(
-    () => toolCalls.find((tc) => tc.status === ToolCallStatus.Confirming),
+  const { borderColor, borderDimColor } = useMemo(
+    () =>
+      getToolGroupBorderAppearance(
+        item,
+        activePtyId,
+        embeddedShellFocused,
+        pendingHistoryItems,
+        backgroundShells,
+      ),
+    [
+      item,
+      activePtyId,
+      embeddedShellFocused,
+      pendingHistoryItems,
+      backgroundShells,
+    ],
+  );
+
+  // We HIDE tools that are still in pre-execution states (Confirming, Pending)
+  // from the History log. They live in the Global Queue or wait for their turn.
+  // Only show tools that are actually running or finished.
+  // We explicitly exclude Pending and Confirming to ensure they only
+  // appear in the Global Queue until they are approved and start executing.
+  const visibleToolCalls = useMemo(
+    () =>
+      toolCalls.filter((t) => {
+        const displayStatus = mapCoreStatusToDisplayStatus(t.status);
+        return (
+          displayStatus !== ToolCallStatus.Pending &&
+          displayStatus !== ToolCallStatus.Confirming
+        );
+      }),
+
     [toolCalls],
   );
 
+  const staticHeight = /* border */ 2;
+
   let countToolCallsWithResults = 0;
-  for (const tool of toolCalls) {
+  for (const tool of visibleToolCalls) {
     if (tool.resultDisplay !== undefined && tool.resultDisplay !== '') {
       countToolCallsWithResults++;
     }
   }
-  const countOneLineToolCalls = toolCalls.length - countToolCallsWithResults;
+  const countOneLineToolCalls =
+    visibleToolCalls.length - countToolCallsWithResults;
   const availableTerminalHeightPerToolMessage = availableTerminalHeight
     ? Math.max(
         Math.floor(
@@ -68,62 +139,102 @@ export const ToolGroupMessage: React.FC<ToolGroupMessageProps> = ({
       )
     : undefined;
 
-  return (
+  const contentWidth = terminalWidth - TOOL_MESSAGE_HORIZONTAL_MARGIN;
+
+  // If all tools are filtered out (e.g., in-progress AskUser tools, confirming tools),
+  // only render if we need to close a border from previous
+  // tool groups. borderBottomOverride=true means we must render the closing border;
+  // undefined or false means there's nothing to display.
+  if (visibleToolCalls.length === 0 && borderBottomOverride !== true) {
+    return null;
+  }
+
+  const content = (
     <Box
       flexDirection="column"
-      borderStyle="round"
       /*
-        This width constraint is highly important and protects us from an Ink rendering bug.
-        Since the ToolGroup can typically change rendering states frequently, it can cause
-        Ink to render the border of the box incorrectly and span multiple lines and even
-        cause tearing.
-      */
-      width="100%"
-      marginLeft={1}
-      borderDimColor={hasPending}
-      borderColor={borderColor}
-      gap={1}
+      This width constraint is highly important and protects us from an Ink rendering bug.
+      Since the ToolGroup can typically change rendering states frequently, it can cause
+      Ink to render the border of the box incorrectly and span multiple lines and even
+      cause tearing.
+    */
+      width={terminalWidth}
+      paddingRight={TOOL_MESSAGE_HORIZONTAL_MARGIN}
     >
-      {toolCalls.map((tool) => {
-        const isConfirming = toolAwaitingApproval?.callId === tool.callId;
+      {visibleToolCalls.map((tool, index) => {
+        const isFirst = index === 0;
+        const isShellToolCall = isShellTool(tool.name);
+
+        const commonProps = {
+          ...tool,
+          availableTerminalHeight: availableTerminalHeightPerToolMessage,
+          terminalWidth: contentWidth,
+          emphasis: 'medium' as const,
+          isFirst:
+            borderTopOverride !== undefined
+              ? borderTopOverride && isFirst
+              : isFirst,
+          borderColor,
+          borderDimColor,
+          isExpandable,
+        };
+
         return (
-          <Box key={tool.callId} flexDirection="column" minHeight={1}>
-            <Box flexDirection="row" alignItems="center">
-              <ToolMessage
-                callId={tool.callId}
-                name={tool.name}
-                description={tool.description}
-                resultDisplay={tool.resultDisplay}
-                status={tool.status}
-                confirmationDetails={tool.confirmationDetails}
-                availableTerminalHeight={availableTerminalHeightPerToolMessage}
-                terminalWidth={innerWidth}
-                emphasis={
-                  isConfirming
-                    ? 'high'
-                    : toolAwaitingApproval
-                      ? 'low'
-                      : 'medium'
-                }
-                renderOutputAsMarkdown={tool.renderOutputAsMarkdown}
-              />
-            </Box>
-            {tool.status === ToolCallStatus.Confirming &&
-              isConfirming &&
-              tool.confirmationDetails && (
-                <ToolConfirmationMessage
-                  confirmationDetails={tool.confirmationDetails}
-                  config={config}
-                  isFocused={isFocused}
-                  availableTerminalHeight={
-                    availableTerminalHeightPerToolMessage
-                  }
-                  terminalWidth={innerWidth}
-                />
-              )}
+          <Box
+            key={tool.callId}
+            flexDirection="column"
+            minHeight={1}
+            width={contentWidth}
+          >
+            {isShellToolCall ? (
+              <ShellToolMessage {...commonProps} config={config} />
+            ) : (
+              <ToolMessage {...commonProps} />
+            )}
+            {tool.outputFile && (
+              <Box
+                borderLeft={true}
+                borderRight={true}
+                borderTop={false}
+                borderBottom={false}
+                borderColor={borderColor}
+                borderDimColor={borderDimColor}
+                flexDirection="column"
+                borderStyle="round"
+                paddingLeft={1}
+                paddingRight={1}
+              >
+                <Box>
+                  <Text color={theme.text.primary}>
+                    Output too long and was saved to: {tool.outputFile}
+                  </Text>
+                </Box>
+              </Box>
+            )}
           </Box>
         );
       })}
+      {
+        /*
+            We have to keep the bottom border separate so it doesn't get
+            drawn over by the sticky header directly inside it.
+           */
+        (visibleToolCalls.length > 0 || borderBottomOverride !== undefined) && (
+          <Box
+            height={0}
+            width={contentWidth}
+            borderLeft={true}
+            borderRight={true}
+            borderTop={false}
+            borderBottom={borderBottomOverride ?? true}
+            borderColor={borderColor}
+            borderDimColor={borderDimColor}
+            borderStyle="round"
+          />
+        )
+      }
     </Box>
   );
+
+  return content;
 };

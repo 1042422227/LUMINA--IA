@@ -43,11 +43,20 @@ async function main() {
     outfile: 'dist/extension.cjs',
     external: ['vscode'],
     logLevel: 'silent',
+    banner: {
+      js: `const import_meta = { url: require('url').pathToFileURL(__filename).href };`,
+    },
+    define: {
+      'import.meta.url': 'import_meta.url',
+    },
+    alias: {
+      punycode: 'punycode/',
+    },
     plugins: [
       /* add to the end of plugins array */
       esbuildProblemMatcherPlugin,
     ],
-    loader: { '.node': 'file' },
+    loader: { '.node': 'file', '.wasm': 'binary' },
   });
   if (watch) {
     await ctx.watch();

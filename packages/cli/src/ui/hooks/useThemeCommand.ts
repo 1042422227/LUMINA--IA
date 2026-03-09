@@ -4,41 +4,40 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { themeManager } from '../themes/theme-manager.js';
-import type { LoadedSettings, SettingScope } from '../../config/settings.js'; // Import LoadedSettings, AppSettings, MergedSetting
-import { type HistoryItem, MessageType } from '../types.js';
+import type {
+  LoadableSettingScope,
+  LoadedSettings,
+} from '../../config/settings.js'; // Import LoadedSettings, AppSettings, MergedSetting
+import { MessageType } from '../types.js';
 import process from 'node:process';
+import type { UseHistoryManagerReturn } from './useHistoryManager.js';
+import { useTerminalContext } from '../contexts/TerminalContext.js';
 
 interface UseThemeCommandReturn {
   isThemeDialogOpen: boolean;
   openThemeDialog: () => void;
+  closeThemeDialog: () => void;
   handleThemeSelect: (
-    themeName: string | undefined,
-    scope: SettingScope,
-  ) => void; // Added scope
+    themeName: string,
+    scope: LoadableSettingScope,
+  ) => Promise<void>;
   handleThemeHighlight: (themeName: string | undefined) => void;
 }
 
 export const useThemeCommand = (
   loadedSettings: LoadedSettings,
   setThemeError: (error: string | null) => void,
-  addItem: (item: Omit<HistoryItem, 'id'>, timestamp: number) => void,
+  addItem: UseHistoryManagerReturn['addItem'],
+  initialThemeError: string | null,
+  refreshStatic: () => void,
 ): UseThemeCommandReturn => {
-  const [isThemeDialogOpen, setIsThemeDialogOpen] = useState(false);
+  const [isThemeDialogOpen, setIsThemeDialogOpen] =
+    useState(!!initialThemeError);
+  const { queryTerminalBackground } = useTerminalContext();
 
-  // Check for invalid theme configuration on startup
-  useEffect(() => {
-    const effectiveTheme = loadedSettings.merged.theme;
-    if (effectiveTheme && !themeManager.findThemeByName(effectiveTheme)) {
-      setIsThemeDialogOpen(true);
-      setThemeError(`Theme "${effectiveTheme}" not found.`);
-    } else {
-      setThemeError(null);
-    }
-  }, [loadedSettings.merged.theme, setThemeError]);
-
-  const openThemeDialog = useCallback(() => {
+  const openThemeDialog = useCallback(async () => {
     if (process.env['NO_COLOR']) {
       addItem(
         {
@@ -49,8 +48,14 @@ export const useThemeCommand = (
       );
       return;
     }
+
+    // Ensure we have an up to date terminal background color when opening the
+    // theme dialog as the user may have just changed it before opening the
+    // dialog.
+    await queryTerminalBackground();
+
     setIsThemeDialogOpen(true);
-  }, [addItem]);
+  }, [addItem, queryTerminalBackground]);
 
   const applyTheme = useCallback(
     (themeName: string | undefined) => {
@@ -72,13 +77,18 @@ export const useThemeCommand = (
     [applyTheme],
   );
 
+  const closeThemeDialog = useCallback(() => {
+    // Re-apply the saved theme to revert any preview changes from highlighting
+    applyTheme(loadedSettings.merged.ui.theme);
+    setIsThemeDialogOpen(false);
+  }, [applyTheme, loadedSettings]);
+
   const handleThemeSelect = useCallback(
-    (themeName: string | undefined, scope: SettingScope) => {
+    async (themeName: string, scope: LoadableSettingScope) => {
       try {
-        // Merge user and workspace custom themes (workspace takes precedence)
         const mergedCustomThemes = {
-          ...(loadedSettings.user.settings.customThemes || {}),
-          ...(loadedSettings.workspace.settings.customThemes || {}),
+          ...(loadedSettings.user.settings.ui?.customThemes || {}),
+          ...(loadedSettings.workspace.settings.ui?.customThemes || {}),
         };
         // Only allow selecting themes available in the merged custom themes or built-in themes
         const isBuiltIn = themeManager.findThemeByName(themeName);
@@ -88,22 +98,24 @@ export const useThemeCommand = (
           setIsThemeDialogOpen(true);
           return;
         }
-        loadedSettings.setValue(scope, 'theme', themeName); // Update the merged settings
-        if (loadedSettings.merged.customThemes) {
-          themeManager.loadCustomThemes(loadedSettings.merged.customThemes);
+        loadedSettings.setValue(scope, 'ui.theme', themeName); // Update the merged settings
+        if (loadedSettings.merged.ui.customThemes) {
+          themeManager.loadCustomThemes(loadedSettings.merged.ui.customThemes);
         }
-        applyTheme(loadedSettings.merged.theme); // Apply the current theme
+        applyTheme(loadedSettings.merged.ui.theme); // Apply the current theme
+        refreshStatic();
         setThemeError(null);
       } finally {
         setIsThemeDialogOpen(false); // Close the dialog
       }
     },
-    [applyTheme, loadedSettings, setThemeError],
+    [applyTheme, loadedSettings, refreshStatic, setThemeError],
   );
 
   return {
     isThemeDialogOpen,
     openThemeDialog,
+    closeThemeDialog,
     handleThemeSelect,
     handleThemeHighlight,
   };

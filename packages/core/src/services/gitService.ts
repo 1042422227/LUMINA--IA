@@ -7,10 +7,10 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { isNodeError } from '../utils/errors.js';
-import { exec } from 'node:child_process';
-import type { SimpleGit } from 'simple-git';
-import { simpleGit, CheckRepoActions } from 'simple-git';
+import { spawnAsync } from '../utils/shell-utils.js';
+import { simpleGit, CheckRepoActions, type SimpleGit } from 'simple-git';
 import type { Storage } from '../config/storage.js';
+import { debugLogger } from '../utils/debugLogger.js';
 
 export class GitService {
   private projectRoot: string;
@@ -26,12 +26,13 @@ export class GitService {
   }
 
   async initialize(): Promise<void> {
-    const gitAvailable = await this.verifyGitAvailability();
+    const gitAvailable = await GitService.verifyGitAvailability();
     if (!gitAvailable) {
       throw new Error(
         'Checkpointing is enabled, but Git is not installed. Please install Git or disable checkpointing to continue.',
       );
     }
+    await this.storage.initialize();
     try {
       await this.setupShadowGitRepository();
     } catch (error) {
@@ -41,16 +42,23 @@ export class GitService {
     }
   }
 
-  verifyGitAvailability(): Promise<boolean> {
-    return new Promise((resolve) => {
-      exec('git --version', (error) => {
-        if (error) {
-          resolve(false);
-        } else {
-          resolve(true);
-        }
-      });
-    });
+  static async verifyGitAvailability(): Promise<boolean> {
+    try {
+      await spawnAsync('git', ['--version']);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  private getShadowRepoEnv(repoDir: string) {
+    const gitConfigPath = path.join(repoDir, '.gitconfig');
+    const systemConfigPath = path.join(repoDir, '.gitconfig_system_empty');
+    return {
+      // Prevent git from using the user's global git config.
+      GIT_CONFIG_GLOBAL: gitConfigPath,
+      GIT_CONFIG_SYSTEM: systemConfigPath,
+    };
   }
 
   /**
@@ -69,8 +77,19 @@ export class GitService {
       '[user]\n  name = Gemini CLI\n  email = gemini-cli@google.com\n[commit]\n  gpgsign = false\n';
     await fs.writeFile(gitConfigPath, gitConfigContent);
 
-    const repo = simpleGit(repoDir);
-    const isRepoDefined = await repo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
+    const shadowRepoEnv = this.getShadowRepoEnv(repoDir);
+    await fs.writeFile(shadowRepoEnv.GIT_CONFIG_SYSTEM, '');
+    const repo = simpleGit(repoDir).env(shadowRepoEnv);
+    let isRepoDefined = false;
+    try {
+      isRepoDefined = await repo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
+    } catch (error) {
+      // If checkIsRepo fails (e.g., on certain Git versions like macOS 2.39.5),
+      // log the error and assume repo is not defined, then proceed with initialization
+      debugLogger.debug(
+        `checkIsRepo failed, will initialize repository: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     if (!isRepoDefined) {
       await repo.init(false, {
@@ -100,9 +119,7 @@ export class GitService {
     return simpleGit(this.projectRoot).env({
       GIT_DIR: path.join(repoDir, '.git'),
       GIT_WORK_TREE: this.projectRoot,
-      // Prevent git from using the user's global git config.
-      HOME: repoDir,
-      XDG_CONFIG_HOME: repoDir,
+      ...this.getShadowRepoEnv(repoDir),
     });
   }
 
@@ -115,7 +132,14 @@ export class GitService {
     try {
       const repo = this.shadowGitRepository;
       await repo.add('.');
-      const commitResult = await repo.commit(message);
+      const status = await repo.status();
+      if (status.isClean()) {
+        // If no changes are staged, return the current HEAD commit hash
+        return await this.getCurrentCommitHash();
+      }
+      const commitResult = await repo.commit(message, {
+        '--no-verify': null,
+      });
       return commitResult.commit;
     } catch (error) {
       throw new Error(

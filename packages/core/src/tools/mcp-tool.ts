@@ -5,20 +5,112 @@
  */
 
 import { safeJsonStringify } from '../utils/safeJsonStringify.js';
-import type {
-  ToolCallConfirmationDetails,
-  ToolInvocation,
-  ToolMcpConfirmationDetails,
-  ToolResult,
-} from './tools.js';
+import { debugLogger } from '../utils/debugLogger.js';
 import {
   BaseDeclarativeTool,
   BaseToolInvocation,
   Kind,
   ToolConfirmationOutcome,
+  type ToolCallConfirmationDetails,
+  type ToolInvocation,
+  type ToolMcpConfirmationDetails,
+  type ToolResult,
+  type PolicyUpdateOptions,
 } from './tools.js';
 import type { CallableTool, FunctionCall, Part } from '@google/genai';
 import { ToolErrorType } from './tool-error.js';
+import type { MessageBus } from '../confirmation-bus/message-bus.js';
+import type { McpContext } from './mcp-client.js';
+
+/**
+ * The separator used to qualify MCP tool names with their server prefix.
+ * e.g. "mcp_server_name_tool_name"
+ */
+export const MCP_QUALIFIED_NAME_SEPARATOR = '_';
+
+/**
+ * The strict prefix that all MCP tools must start with.
+ */
+export const MCP_TOOL_PREFIX = 'mcp_';
+
+/**
+ * Returns true if `name` matches the MCP qualified name format: "mcp_server_tool",
+ * i.e. starts with the "mcp_" prefix.
+ */
+export function isMcpToolName(name: string): boolean {
+  return name.startsWith(MCP_TOOL_PREFIX);
+}
+
+/**
+ * Extracts the server name and tool name from a fully qualified MCP tool name.
+ * Expected format: `mcp_{server_name}_{tool_name}`
+ * @param name The fully qualified tool name.
+ * @returns An object containing the extracted `serverName` and `toolName`, or
+ *          `undefined` properties if the name doesn't match the expected format.
+ */
+export function parseMcpToolName(name: string): {
+  serverName?: string;
+  toolName?: string;
+} {
+  if (!isMcpToolName(name)) {
+    return {};
+  }
+  // Remove the prefix
+  const withoutPrefix = name.slice(MCP_TOOL_PREFIX.length);
+  // The first segment is the server name, the rest is the tool name
+  const match = withoutPrefix.match(/^([^_]+)_(.+)$/);
+  if (match) {
+    return {
+      serverName: match[1],
+      toolName: match[2],
+    };
+  }
+  return {};
+}
+
+/**
+ * Assembles a fully qualified MCP tool name (or wildcard pattern) from its server and tool components.
+ *
+ * @param serverName The backend MCP server name (can be '*' for global wildcards).
+ * @param toolName The name of the tool (can be undefined or '*' for tool-level wildcards).
+ * @returns The fully qualified name (e.g., `mcp_server_tool`, `mcp_*`, `mcp_server_*`).
+ */
+export function formatMcpToolName(
+  serverName: string,
+  toolName?: string,
+): string {
+  if (serverName === '*' && !toolName) {
+    return `${MCP_TOOL_PREFIX}*`;
+  } else if (serverName === '*') {
+    return `${MCP_TOOL_PREFIX}*_${toolName}`;
+  } else if (!toolName) {
+    return `${MCP_TOOL_PREFIX}${serverName}_*`;
+  } else {
+    return `${MCP_TOOL_PREFIX}${serverName}_${toolName}`;
+  }
+}
+
+/**
+ * Interface representing metadata annotations specific to an MCP tool.
+ * Ensures strongly-typed access to server-level properties.
+ */
+export interface McpToolAnnotation extends Record<string, unknown> {
+  _serverName: string;
+}
+
+/**
+ * Type guard to check if tool annotations implement McpToolAnnotation.
+ */
+export function isMcpToolAnnotation(
+  annotation: unknown,
+): annotation is McpToolAnnotation {
+  return (
+    typeof annotation === 'object' &&
+    annotation !== null &&
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, no-restricted-syntax
+    typeof (annotation as Record<string, unknown>)['_serverName'] === 'string'
+  );
+}
 
 type ToolParams = Record<string, unknown>;
 
@@ -56,7 +148,7 @@ type McpContentBlock =
   | McpResourceBlock
   | McpResourceLinkBlock;
 
-class DiscoveredMCPToolInvocation extends BaseToolInvocation<
+export class DiscoveredMCPToolInvocation extends BaseToolInvocation<
   ToolParams,
   ToolResult
 > {
@@ -67,20 +159,44 @@ class DiscoveredMCPToolInvocation extends BaseToolInvocation<
     readonly serverName: string,
     readonly serverToolName: string,
     readonly displayName: string,
-    readonly timeout?: number,
+    messageBus: MessageBus,
     readonly trust?: boolean,
     params: ToolParams = {},
+    private readonly cliConfig?: McpContext,
+    private readonly toolDescription?: string,
+    private readonly toolParameterSchema?: unknown,
+    toolAnnotationsData?: Record<string, unknown>,
   ) {
-    super(params);
+    // Use composite format for policy checks: serverName__toolName
+    // This enables server wildcards (e.g., "google-workspace__*")
+    // while still allowing specific tool rules.
+    // We use the same sanitized names as the registry to ensure policy matches.
+
+    super(
+      params,
+      messageBus,
+      generateValidName(
+        `${serverName}${MCP_QUALIFIED_NAME_SEPARATOR}${serverToolName}`,
+      ),
+      displayName,
+      generateValidName(serverName),
+      toolAnnotationsData,
+    );
   }
 
-  override async shouldConfirmExecute(
+  protected override getPolicyUpdateOptions(
+    _outcome: ToolConfirmationOutcome,
+  ): PolicyUpdateOptions | undefined {
+    return { mcpName: this.serverName };
+  }
+
+  protected override async getConfirmationDetails(
     _abortSignal: AbortSignal,
   ): Promise<ToolCallConfirmationDetails | false> {
     const serverAllowListKey = this.serverName;
     const toolAllowListKey = `${this.serverName}.${this.serverToolName}`;
 
-    if (this.trust) {
+    if (this.cliConfig?.isTrustedFolder() && this.trust) {
       return false; // server is trusted, no confirmation needed
     }
 
@@ -97,11 +213,17 @@ class DiscoveredMCPToolInvocation extends BaseToolInvocation<
       serverName: this.serverName,
       toolName: this.serverToolName, // Display original tool name in confirmation
       toolDisplayName: this.displayName, // Display global registry name exposed to model and user
+      toolArgs: this.params,
+      toolDescription: this.toolDescription,
+      toolParameterSchema: this.toolParameterSchema,
       onConfirm: async (outcome: ToolConfirmationOutcome) => {
         if (outcome === ToolConfirmationOutcome.ProceedAlwaysServer) {
           DiscoveredMCPToolInvocation.allowlist.add(serverAllowListKey);
         } else if (outcome === ToolConfirmationOutcome.ProceedAlwaysTool) {
           DiscoveredMCPToolInvocation.allowlist.add(toolAllowListKey);
+        } else if (outcome === ToolConfirmationOutcome.ProceedAlwaysAndSave) {
+          DiscoveredMCPToolInvocation.allowlist.add(toolAllowListKey);
+          // Persistent policy updates are now handled centrally by the scheduler
         }
       },
     };
@@ -120,6 +242,13 @@ class DiscoveredMCPToolInvocation extends BaseToolInvocation<
     }
 
     if (response) {
+      // Check for top-level isError (MCP Spec compliant)
+      const isErrorTop = (response as { isError?: boolean | string }).isError;
+      if (isErrorTop === true || isErrorTop === 'true') {
+        return true;
+      }
+
+      // Legacy check for nested error object (keep for backward compatibility if any tools rely on it)
       const error = (response as { error?: McpError })?.error;
       const isError = error?.isError;
 
@@ -130,7 +259,8 @@ class DiscoveredMCPToolInvocation extends BaseToolInvocation<
     return false;
   }
 
-  async execute(): Promise<ToolResult> {
+  async execute(signal: AbortSignal): Promise<ToolResult> {
+    this.cliConfig?.setUserInteractedWithMcp?.();
     const functionCalls: FunctionCall[] = [
       {
         name: this.serverToolName,
@@ -138,7 +268,36 @@ class DiscoveredMCPToolInvocation extends BaseToolInvocation<
       },
     ];
 
-    const rawResponseParts = await this.mcpTool.callTool(functionCalls);
+    // Race MCP tool call with abort signal to respect cancellation
+    const rawResponseParts = await new Promise<Part[]>((resolve, reject) => {
+      if (signal.aborted) {
+        const error = new Error('Tool call aborted');
+        error.name = 'AbortError';
+        reject(error);
+        return;
+      }
+      const onAbort = () => {
+        cleanup();
+        const error = new Error('Tool call aborted');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      const cleanup = () => {
+        signal.removeEventListener('abort', onAbort);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      this.mcpTool
+        .callTool(functionCalls)
+        .then((res) => {
+          cleanup();
+          resolve(res);
+        })
+        .catch((err) => {
+          cleanup();
+          reject(err);
+        });
+    });
 
     // Ensure the response is not an error
     if (this.isMCPToolError(rawResponseParts)) {
@@ -180,18 +339,55 @@ export class DiscoveredMCPTool extends BaseDeclarativeTool<
     readonly serverToolName: string,
     description: string,
     override readonly parameterSchema: unknown,
-    readonly timeout?: number,
+    messageBus: MessageBus,
     readonly trust?: boolean,
+    isReadOnly?: boolean,
     nameOverride?: string,
+    private readonly cliConfig?: McpContext,
+    override readonly extensionName?: string,
+    override readonly extensionId?: string,
+    private readonly _toolAnnotations?: Record<string, unknown>,
   ) {
     super(
-      nameOverride ?? generateValidName(serverToolName),
+      nameOverride ??
+        generateValidName(
+          `${serverName}${MCP_QUALIFIED_NAME_SEPARATOR}${serverToolName}`,
+        ),
       `${serverToolName} (${serverName} MCP Server)`,
       description,
       Kind.Other,
       parameterSchema,
+      messageBus,
       true, // isOutputMarkdown
-      false, // canUpdateOutput
+      false, // canUpdateOutput,
+      extensionName,
+      extensionId,
+    );
+    this._isReadOnly = isReadOnly;
+  }
+
+  private readonly _isReadOnly?: boolean;
+
+  override get isReadOnly(): boolean {
+    if (this._isReadOnly !== undefined) {
+      return this._isReadOnly;
+    }
+    return super.isReadOnly;
+  }
+
+  override get toolAnnotations(): Record<string, unknown> | undefined {
+    return this._toolAnnotations;
+  }
+
+  getFullyQualifiedPrefix(): string {
+    return generateValidName(
+      `${this.serverName}${MCP_QUALIFIED_NAME_SEPARATOR}`,
+    );
+  }
+
+  getFullyQualifiedName(): string {
+    return generateValidName(
+      `${this.serverName}${MCP_QUALIFIED_NAME_SEPARATOR}${this.serverToolName}`,
     );
   }
 
@@ -202,23 +398,35 @@ export class DiscoveredMCPTool extends BaseDeclarativeTool<
       this.serverToolName,
       this.description,
       this.parameterSchema,
-      this.timeout,
+      this.messageBus,
       this.trust,
-      `${this.serverName}__${this.serverToolName}`,
+      this.isReadOnly,
+      this.getFullyQualifiedName(),
+      this.cliConfig,
+      this.extensionName,
+      this.extensionId,
+      this._toolAnnotations,
     );
   }
 
   protected createInvocation(
     params: ToolParams,
+    messageBus: MessageBus,
+    _toolName?: string,
+    _displayName?: string,
   ): ToolInvocation<ToolParams, ToolResult> {
     return new DiscoveredMCPToolInvocation(
       this.mcpTool,
       this.serverName,
       this.serverToolName,
-      this.displayName,
-      this.timeout,
+      _displayName ?? this.displayName,
+      messageBus,
       this.trust,
       params,
+      this.cliConfig,
+      this.description,
+      this.parameterSchema,
+      this._toolAnnotations,
     );
   }
 }
@@ -285,6 +493,7 @@ function transformResourceLinkBlock(block: McpResourceLinkBlock): Part {
  */
 function transformMcpContentToParts(sdkResponse: Part[]): Part[] {
   const funcResponse = sdkResponse?.[0]?.functionResponse;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const mcpContent = funcResponse?.response?.['content'] as McpContentBlock[];
   const toolName = funcResponse?.name || 'unknown tool';
 
@@ -322,6 +531,7 @@ function transformMcpContentToParts(sdkResponse: Part[]): Part[] {
  * @returns A formatted string representing the tool's output.
  */
 function getStringifiedResultForDisplay(rawResponse: Part[]): string {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const mcpContent = rawResponse?.[0]?.functionResponse?.response?.[
     'content'
   ] as McpContentBlock[];
@@ -355,16 +565,36 @@ function getStringifiedResultForDisplay(rawResponse: Part[]): string {
   return displayParts.join('\n');
 }
 
+/**
+ * Maximum length for a function name in the Gemini API.
+ * @see https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/function-calling#functiondeclaration
+ */
+const MAX_FUNCTION_NAME_LENGTH = 64;
+
 /** Visible for testing */
 export function generateValidName(name: string) {
-  // Replace invalid characters (based on 400 error message from Gemini API) with underscores
-  let validToolname = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+  // Enforce the mcp_ prefix for all generated MCP tool names
+  let validToolname = name.startsWith('mcp_') ? name : `mcp_${name}`;
 
-  // If longer than 63 characters, replace middle with '___'
-  // (Gemini API says max length 64, but actual limit seems to be 63)
-  if (validToolname.length > 63) {
-    validToolname =
-      validToolname.slice(0, 28) + '___' + validToolname.slice(-32);
+  // Replace invalid characters with underscores to conform to Gemini API:
+  // ^[a-zA-Z_][a-zA-Z0-9_\-.:]{0,63}$
+  validToolname = validToolname.replace(/[^a-zA-Z0-9_\-.:]/g, '_');
+
+  // Ensure it starts with a letter or underscore
+  if (/^[^a-zA-Z_]/.test(validToolname)) {
+    validToolname = `_${validToolname}`;
   }
+
+  // If longer than the API limit, replace middle with '...'
+  // Note: We use 63 instead of 64 to be safe, as some environments have off-by-one behaviors.
+  const safeLimit = MAX_FUNCTION_NAME_LENGTH - 1;
+  if (validToolname.length > safeLimit) {
+    debugLogger.warn(
+      `Truncating MCP tool name "${validToolname}" to fit within the 64 character limit. This tool may require user approval.`,
+    );
+    validToolname =
+      validToolname.slice(0, 30) + '...' + validToolname.slice(-30);
+  }
+
   return validToolname;
 }

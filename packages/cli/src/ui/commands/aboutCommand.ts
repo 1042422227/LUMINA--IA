@@ -4,16 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getCliVersion } from '../../utils/version.js';
-import type { SlashCommand } from './types.js';
+import type { CommandContext, SlashCommand } from './types.js';
 import { CommandKind } from './types.js';
 import process from 'node:process';
 import { MessageType, type HistoryItemAbout } from '../types.js';
+import {
+  IdeClient,
+  UserAccountManager,
+  debugLogger,
+  getVersion,
+} from '@google/gemini-cli-core';
 
 export const aboutCommand: SlashCommand = {
   name: 'about',
-  description: 'show version info',
+  description: 'Show version info',
   kind: CommandKind.BUILT_IN,
+  autoExecute: true,
   action: async (context) => {
     const osVersion = process.platform;
     let sandboxEnv = 'no sandbox';
@@ -25,14 +31,20 @@ export const aboutCommand: SlashCommand = {
       })`;
     }
     const modelVersion = context.services.config?.getModel() || 'Unknown';
-    const cliVersion = await getCliVersion();
+    const cliVersion = await getVersion();
     const selectedAuthType =
-      context.services.settings.merged.selectedAuthType || '';
+      context.services.settings.merged.security.auth.selectedType || '';
     const gcpProject = process.env['GOOGLE_CLOUD_PROJECT'] || '';
-    const ideClient =
-      (context.services.config?.getIdeMode() &&
-        context.services.config?.getIdeClient()?.getDetectedIdeDisplayName()) ||
-      '';
+    const ideClient = await getIdeClientName(context);
+
+    const userAccountManager = new UserAccountManager();
+    const cachedAccount = userAccountManager.getCachedGoogleAccount();
+    debugLogger.log('AboutCommand: Retrieved cached Google account', {
+      cachedAccount,
+    });
+    const userEmail = cachedAccount ?? undefined;
+
+    const tier = context.services.config?.getUserTierName();
 
     const aboutItem: Omit<HistoryItemAbout, 'id'> = {
       type: MessageType.ABOUT,
@@ -43,8 +55,18 @@ export const aboutCommand: SlashCommand = {
       selectedAuthType,
       gcpProject,
       ideClient,
+      userEmail,
+      tier,
     };
 
-    context.ui.addItem(aboutItem, Date.now());
+    context.ui.addItem(aboutItem);
   },
 };
+
+async function getIdeClientName(context: CommandContext) {
+  if (!context.services.config?.getIdeMode()) {
+    return '';
+  }
+  const ideClient = await IdeClient.getInstance();
+  return ideClient?.getDetectedIdeDisplayName() ?? '';
+}

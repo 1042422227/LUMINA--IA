@@ -4,61 +4,127 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { GitIgnoreFilter } from '../utils/gitIgnoreParser.js';
-import { GitIgnoreParser } from '../utils/gitIgnoreParser.js';
+import {
+  GitIgnoreParser,
+  type GitIgnoreFilter,
+} from '../utils/gitIgnoreParser.js';
+import {
+  IgnoreFileParser,
+  type IgnoreFileFilter,
+} from '../utils/ignoreFileParser.js';
 import { isGitRepository } from '../utils/gitUtils.js';
+import { GEMINI_IGNORE_FILE_NAME } from '../config/constants.js';
+import fs from 'node:fs';
 import * as path from 'node:path';
-
-const GEMINI_IGNORE_FILE_NAME = '.geminiignore';
 
 export interface FilterFilesOptions {
   respectGitIgnore?: boolean;
   respectGeminiIgnore?: boolean;
+  customIgnoreFilePaths?: string[];
+}
+
+export interface FilterReport {
+  filteredPaths: string[];
+  ignoredCount: number;
 }
 
 export class FileDiscoveryService {
   private gitIgnoreFilter: GitIgnoreFilter | null = null;
-  private geminiIgnoreFilter: GitIgnoreFilter | null = null;
+  private geminiIgnoreFilter: IgnoreFileFilter | null = null;
+  private customIgnoreFilter: IgnoreFileFilter | null = null;
+  private combinedIgnoreFilter: GitIgnoreFilter | IgnoreFileFilter | null =
+    null;
+  private defaultFilterFileOptions: FilterFilesOptions = {
+    respectGitIgnore: true,
+    respectGeminiIgnore: true,
+    customIgnoreFilePaths: [],
+  };
   private projectRoot: string;
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, options?: FilterFilesOptions) {
     this.projectRoot = path.resolve(projectRoot);
+    this.applyFilterFilesOptions(options);
     if (isGitRepository(this.projectRoot)) {
-      const parser = new GitIgnoreParser(this.projectRoot);
-      try {
-        parser.loadGitRepoPatterns();
-      } catch (_error) {
-        // ignore file not found
-      }
-      this.gitIgnoreFilter = parser;
+      this.gitIgnoreFilter = new GitIgnoreParser(this.projectRoot);
     }
-    const gParser = new GitIgnoreParser(this.projectRoot);
-    try {
-      gParser.loadPatterns(GEMINI_IGNORE_FILE_NAME);
-    } catch (_error) {
-      // ignore file not found
+    this.geminiIgnoreFilter = new IgnoreFileParser(
+      this.projectRoot,
+      GEMINI_IGNORE_FILE_NAME,
+    );
+    if (this.defaultFilterFileOptions.customIgnoreFilePaths?.length) {
+      this.customIgnoreFilter = new IgnoreFileParser(
+        this.projectRoot,
+        this.defaultFilterFileOptions.customIgnoreFilePaths,
+      );
     }
-    this.geminiIgnoreFilter = gParser;
+
+    if (this.gitIgnoreFilter) {
+      const geminiPatterns = this.geminiIgnoreFilter.getPatterns();
+      const customPatterns = this.customIgnoreFilter
+        ? this.customIgnoreFilter.getPatterns()
+        : [];
+      // Create combined parser: .gitignore + .geminiignore + custom ignore
+      this.combinedIgnoreFilter = new GitIgnoreParser(
+        this.projectRoot,
+        // customPatterns should go the last to ensure overwriting of geminiPatterns
+        [...geminiPatterns, ...customPatterns],
+      );
+    } else {
+      // Create combined parser when not git repo
+      const geminiPatterns = this.geminiIgnoreFilter.getPatterns();
+      const customPatterns = this.customIgnoreFilter
+        ? this.customIgnoreFilter.getPatterns()
+        : [];
+      this.combinedIgnoreFilter = new IgnoreFileParser(
+        this.projectRoot,
+        [...geminiPatterns, ...customPatterns],
+        true,
+      );
+    }
+  }
+
+  private applyFilterFilesOptions(options?: FilterFilesOptions): void {
+    if (!options) return;
+
+    if (options.respectGitIgnore !== undefined) {
+      this.defaultFilterFileOptions.respectGitIgnore = options.respectGitIgnore;
+    }
+    if (options.respectGeminiIgnore !== undefined) {
+      this.defaultFilterFileOptions.respectGeminiIgnore =
+        options.respectGeminiIgnore;
+    }
+    if (options.customIgnoreFilePaths) {
+      this.defaultFilterFileOptions.customIgnoreFilePaths =
+        options.customIgnoreFilePaths;
+    }
   }
 
   /**
-   * Filters a list of file paths based on git ignore rules
+   * Filters a list of file paths based on ignore rules
    */
-  filterFiles(
-    filePaths: string[],
-    options: FilterFilesOptions = {
-      respectGitIgnore: true,
-      respectGeminiIgnore: true,
-    },
-  ): string[] {
+  filterFiles(filePaths: string[], options: FilterFilesOptions = {}): string[] {
+    const {
+      respectGitIgnore = this.defaultFilterFileOptions.respectGitIgnore,
+      respectGeminiIgnore = this.defaultFilterFileOptions.respectGeminiIgnore,
+    } = options;
     return filePaths.filter((filePath) => {
-      if (options.respectGitIgnore && this.shouldGitIgnoreFile(filePath)) {
+      if (
+        respectGitIgnore &&
+        respectGeminiIgnore &&
+        this.combinedIgnoreFilter
+      ) {
+        return !this.combinedIgnoreFilter.isIgnored(filePath);
+      }
+
+      // Always respect custom ignore filter if provided
+      if (this.customIgnoreFilter?.isIgnored(filePath)) {
         return false;
       }
-      if (
-        options.respectGeminiIgnore &&
-        this.shouldGeminiIgnoreFile(filePath)
-      ) {
+
+      if (respectGitIgnore && this.gitIgnoreFilter?.isIgnored(filePath)) {
+        return false;
+      }
+      if (respectGeminiIgnore && this.geminiIgnoreFilter?.isIgnored(filePath)) {
         return false;
       }
       return true;
@@ -66,23 +132,23 @@ export class FileDiscoveryService {
   }
 
   /**
-   * Checks if a single file should be git-ignored
+   * Filters a list of file paths based on git ignore rules and returns a report
+   * with counts of ignored files.
    */
-  shouldGitIgnoreFile(filePath: string): boolean {
-    if (this.gitIgnoreFilter) {
-      return this.gitIgnoreFilter.isIgnored(filePath);
-    }
-    return false;
-  }
+  filterFilesWithReport(
+    filePaths: string[],
+    opts: FilterFilesOptions = {
+      respectGitIgnore: true,
+      respectGeminiIgnore: true,
+    },
+  ): FilterReport {
+    const filteredPaths = this.filterFiles(filePaths, opts);
+    const ignoredCount = filePaths.length - filteredPaths.length;
 
-  /**
-   * Checks if a single file should be gemini-ignored
-   */
-  shouldGeminiIgnoreFile(filePath: string): boolean {
-    if (this.geminiIgnoreFilter) {
-      return this.geminiIgnoreFilter.isIgnored(filePath);
-    }
-    return false;
+    return {
+      filteredPaths,
+      ignoredCount,
+    };
   }
 
   /**
@@ -92,21 +158,40 @@ export class FileDiscoveryService {
     filePath: string,
     options: FilterFilesOptions = {},
   ): boolean {
-    const { respectGitIgnore = true, respectGeminiIgnore = true } = options;
-
-    if (respectGitIgnore && this.shouldGitIgnoreFile(filePath)) {
-      return true;
-    }
-    if (respectGeminiIgnore && this.shouldGeminiIgnoreFile(filePath)) {
-      return true;
-    }
-    return false;
+    return this.filterFiles([filePath], options).length === 0;
   }
 
   /**
-   * Returns loaded patterns from .geminiignore
+   * Returns the list of ignore files being used (e.g. .geminiignore) excluding .gitignore.
    */
-  getGeminiIgnorePatterns(): string[] {
-    return this.geminiIgnoreFilter?.getPatterns() ?? [];
+  getIgnoreFilePaths(): string[] {
+    const paths: string[] = [];
+    if (
+      this.geminiIgnoreFilter &&
+      this.defaultFilterFileOptions.respectGeminiIgnore
+    ) {
+      paths.push(...this.geminiIgnoreFilter.getIgnoreFilePaths());
+    }
+    if (this.customIgnoreFilter) {
+      paths.push(...this.customIgnoreFilter.getIgnoreFilePaths());
+    }
+    return paths;
+  }
+
+  /**
+   * Returns all ignore files including .gitignore if applicable.
+   */
+  getAllIgnoreFilePaths(): string[] {
+    const paths: string[] = [];
+    if (
+      this.gitIgnoreFilter &&
+      this.defaultFilterFileOptions.respectGitIgnore
+    ) {
+      const gitIgnorePath = path.join(this.projectRoot, '.gitignore');
+      if (fs.existsSync(gitIgnorePath)) {
+        paths.push(gitIgnorePath);
+      }
+    }
+    return paths.concat(this.getIgnoreFilePaths());
   }
 }

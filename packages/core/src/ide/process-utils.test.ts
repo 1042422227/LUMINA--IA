@@ -34,6 +34,49 @@ describe('getIdeProcessInfo', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  describe('GEMINI_CLI_IDE_PID override', () => {
+    it('should use GEMINI_CLI_IDE_PID and fetch command on Unix', async () => {
+      (os.platform as Mock).mockReturnValue('linux');
+      vi.stubEnv('GEMINI_CLI_IDE_PID', '12345');
+      mockedExec.mockResolvedValueOnce({ stdout: '0 my-ide-command' }); // getProcessInfo result
+
+      const result = await getIdeProcessInfo();
+
+      expect(result).toEqual({ pid: 12345, command: 'my-ide-command' });
+      expect(mockedExec).toHaveBeenCalledWith(
+        expect.stringContaining('ps -o ppid=,command= -p 12345'),
+      );
+    });
+
+    it('should use GEMINI_CLI_IDE_PID and fetch command on Windows', async () => {
+      (os.platform as Mock).mockReturnValue('win32');
+      vi.stubEnv('GEMINI_CLI_IDE_PID', '54321');
+      const processes = [
+        {
+          ProcessId: 54321,
+          ParentProcessId: 0,
+          Name: 'Code.exe',
+          CommandLine: 'C:\\Program Files\\VSCode\\Code.exe',
+        },
+      ];
+      mockedExec.mockResolvedValueOnce({ stdout: JSON.stringify(processes) });
+
+      const result = await getIdeProcessInfo();
+
+      expect(result).toEqual({
+        pid: 54321,
+        command: 'C:\\Program Files\\VSCode\\Code.exe',
+      });
+      expect(mockedExec).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine',
+        ),
+        expect.anything(),
+      );
+    });
   });
 
   describe('on Unix', () => {
@@ -65,26 +108,118 @@ describe('getIdeProcessInfo', () => {
   describe('on Windows', () => {
     it('should traverse up and find the great-grandchild of the root process', async () => {
       (os.platform as Mock).mockReturnValue('win32');
-      const processInfoMap = new Map([
-        [1000, { stdout: 'ParentProcessId=900\r\nCommandLine=node.exe\r\n' }],
-        [
-          900,
-          { stdout: 'ParentProcessId=800\r\nCommandLine=powershell.exe\r\n' },
-        ],
-        [800, { stdout: 'ParentProcessId=700\r\nCommandLine=code.exe\r\n' }],
-        [700, { stdout: 'ParentProcessId=0\r\nCommandLine=wininit.exe\r\n' }],
-      ]);
-      mockedExec.mockImplementation((command: string) => {
-        const pidMatch = command.match(/ProcessId=(\d+)/);
-        if (pidMatch) {
-          const pid = parseInt(pidMatch[1], 10);
-          return Promise.resolve(processInfoMap.get(pid));
-        }
-        return Promise.reject(new Error('Invalid command for mock'));
-      });
+      // process (1000) -> powershell (900) -> code (800) -> wininit (700) -> root (0)
+      // Ancestors: [1000, 900, 800, 700]
+      // Target (great-grandchild of root): 900
+      const processes = [
+        {
+          ProcessId: 1000,
+          ParentProcessId: 900,
+          Name: 'node.exe',
+          CommandLine: 'node.exe',
+        },
+        {
+          ProcessId: 900,
+          ParentProcessId: 800,
+          Name: 'powershell.exe',
+          CommandLine: 'powershell.exe',
+        },
+        {
+          ProcessId: 800,
+          ParentProcessId: 700,
+          Name: 'code.exe',
+          CommandLine: 'code.exe',
+        },
+        {
+          ProcessId: 700,
+          ParentProcessId: 0,
+          Name: 'wininit.exe',
+          CommandLine: 'wininit.exe',
+        },
+      ];
+      mockedExec.mockResolvedValueOnce({ stdout: JSON.stringify(processes) });
 
       const result = await getIdeProcessInfo();
       expect(result).toEqual({ pid: 900, command: 'powershell.exe' });
+      expect(mockedExec).toHaveBeenCalledWith(
+        expect.stringContaining('Get-CimInstance Win32_Process'),
+        expect.anything(),
+      );
+    });
+
+    it('should handle short process chains', async () => {
+      (os.platform as Mock).mockReturnValue('win32');
+      // process (1000) -> root (0)
+      const processes = [
+        {
+          ProcessId: 1000,
+          ParentProcessId: 0,
+          Name: 'node.exe',
+          CommandLine: 'node.exe',
+        },
+      ];
+      mockedExec.mockResolvedValueOnce({ stdout: JSON.stringify(processes) });
+
+      const result = await getIdeProcessInfo();
+      expect(result).toEqual({ pid: 1000, command: 'node.exe' });
+    });
+
+    it('should handle PowerShell failure gracefully', async () => {
+      (os.platform as Mock).mockReturnValue('win32');
+      mockedExec.mockRejectedValueOnce(new Error('PowerShell failed'));
+      // Fallback to getProcessInfo for current PID
+      mockedExec.mockResolvedValueOnce({ stdout: '' }); // ps command fails on windows
+
+      const result = await getIdeProcessInfo();
+      expect(result).toEqual({ pid: 1000, command: '' });
+    });
+
+    it('should handle malformed JSON output gracefully', async () => {
+      (os.platform as Mock).mockReturnValue('win32');
+      mockedExec.mockResolvedValueOnce({ stdout: '{"invalid":json}' });
+      // Fallback to getProcessInfo for current PID
+      mockedExec.mockResolvedValueOnce({ stdout: '' });
+
+      const result = await getIdeProcessInfo();
+      expect(result).toEqual({ pid: 1000, command: '' });
+    });
+
+    it('should handle single process output from ConvertTo-Json', async () => {
+      (os.platform as Mock).mockReturnValue('win32');
+      const process = {
+        ProcessId: 1000,
+        ParentProcessId: 0,
+        Name: 'node.exe',
+        CommandLine: 'node.exe',
+      };
+      mockedExec.mockResolvedValueOnce({ stdout: JSON.stringify(process) });
+
+      const result = await getIdeProcessInfo();
+      expect(result).toEqual({ pid: 1000, command: 'node.exe' });
+    });
+
+    it('should handle missing process in map during traversal', async () => {
+      (os.platform as Mock).mockReturnValue('win32');
+      // process (1000) -> parent (900) -> missing (800)
+      const processes = [
+        {
+          ProcessId: 1000,
+          ParentProcessId: 900,
+          Name: 'node.exe',
+          CommandLine: 'node.exe',
+        },
+        {
+          ProcessId: 900,
+          ParentProcessId: 800,
+          Name: 'parent.exe',
+          CommandLine: 'parent.exe',
+        },
+      ];
+      mockedExec.mockResolvedValueOnce({ stdout: JSON.stringify(processes) });
+
+      const result = await getIdeProcessInfo();
+      // Ancestors: [1000, 900]. Length < 3, returns last (900)
+      expect(result).toEqual({ pid: 900, command: 'parent.exe' });
     });
   });
 });

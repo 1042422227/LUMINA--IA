@@ -1,1120 +1,598 @@
 /**
  * @license
- * Copyright 2025 Google LLC
+ * Copyright 2026 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import type { Mock } from 'vitest';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { act } from 'react';
+import { renderHook } from '../../test-utils/render.js';
+import { useToolScheduler } from './useToolScheduler.js';
 import {
-  useReactToolScheduler,
-  mapToDisplay,
-} from './useReactToolScheduler.js';
-import type { PartUnion, FunctionResponse } from '@google/genai';
-import type {
-  Config,
-  ToolCallRequestInfo,
-  ToolRegistry,
-  ToolResult,
-  ToolCallConfirmationDetails,
-  ToolCallResponseInfo,
-  ToolCall, // Import from core
-  Status as ToolCallStatusType,
-  ToolInvocation,
-  AnyDeclarativeTool,
-  AnyToolInvocation,
+  MessageBusType,
+  Scheduler,
+  type Config,
+  type MessageBus,
+  type ExecutingToolCall,
+  type CompletedToolCall,
+  type ToolCallsUpdateMessage,
+  type AnyDeclarativeTool,
+  type AnyToolInvocation,
+  ROOT_SCHEDULER_ID,
+  CoreToolCallStatus,
+  type WaitingToolCall,
 } from '@google/gemini-cli-core';
-import {
-  ToolConfirmationOutcome,
-  ApprovalMode,
-  Kind,
-  BaseDeclarativeTool,
-  BaseToolInvocation,
-} from '@google/gemini-cli-core';
-import type { HistoryItemWithoutId, HistoryItemToolGroup } from '../types.js';
-import { ToolCallStatus } from '../types.js';
+import { createMockMessageBus } from '@google/gemini-cli-core/src/test-utils/mock-message-bus.js';
 
-// Mocks
-vi.mock('@google/gemini-cli-core', async () => {
-  const actual = await vi.importActual('@google/gemini-cli-core');
+// Mock Core Scheduler
+vi.mock('@google/gemini-cli-core', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@google/gemini-cli-core')>();
   return {
     ...actual,
-    ToolRegistry: vi.fn(),
-    Config: vi.fn(),
+    Scheduler: vi.fn().mockImplementation(() => ({
+      schedule: vi.fn().mockResolvedValue([]),
+      cancelAll: vi.fn(),
+      dispose: vi.fn(),
+    })),
   };
 });
 
-const mockToolRegistry = {
-  getTool: vi.fn(),
-};
+const createMockTool = (
+  overrides: Partial<AnyDeclarativeTool> = {},
+): AnyDeclarativeTool =>
+  ({
+    name: 'test_tool',
+    displayName: 'Test Tool',
+    description: 'A test tool',
+    kind: 'function',
+    parameterSchema: {},
+    isOutputMarkdown: false,
+    build: vi.fn(),
+    ...overrides,
+  }) as AnyDeclarativeTool;
 
-const mockConfig = {
-  getToolRegistry: vi.fn(() => mockToolRegistry as unknown as ToolRegistry),
-  getApprovalMode: vi.fn(() => ApprovalMode.DEFAULT),
-  getSessionId: () => 'test-session-id',
-  getUsageStatisticsEnabled: () => true,
-  getDebugMode: () => false,
-  getAllowedTools: vi.fn(() => []),
-  getContentGeneratorConfig: () => ({
-    model: 'test-model',
-    authType: 'oauth-personal',
-  }),
-} as unknown as Config;
+const createMockInvocation = (
+  overrides: Partial<AnyToolInvocation> = {},
+): AnyToolInvocation =>
+  ({
+    getDescription: () => 'Executing test tool',
+    shouldConfirmExecute: vi.fn(),
+    execute: vi.fn(),
+    params: {},
+    toolLocations: [],
+    ...overrides,
+  }) as AnyToolInvocation;
 
-class MockToolInvocation extends BaseToolInvocation<object, ToolResult> {
-  constructor(
-    private readonly tool: MockTool,
-    params: object,
-  ) {
-    super(params);
-  }
-
-  getDescription(): string {
-    return JSON.stringify(this.params);
-  }
-
-  override shouldConfirmExecute(
-    abortSignal: AbortSignal,
-  ): Promise<ToolCallConfirmationDetails | false> {
-    return this.tool.shouldConfirmExecute(this.params, abortSignal);
-  }
-
-  execute(
-    signal: AbortSignal,
-    updateOutput?: (output: string) => void,
-    terminalColumns?: number,
-    terminalRows?: number,
-  ): Promise<ToolResult> {
-    return this.tool.execute(
-      this.params,
-      signal,
-      updateOutput,
-      terminalColumns,
-      terminalRows,
-    );
-  }
-}
-
-class MockTool extends BaseDeclarativeTool<object, ToolResult> {
-  constructor(
-    name: string,
-    displayName: string,
-    canUpdateOutput = false,
-    shouldConfirm = false,
-    isOutputMarkdown = false,
-  ) {
-    super(
-      name,
-      displayName,
-      'A mock tool for testing',
-      Kind.Other,
-      {},
-      isOutputMarkdown,
-      canUpdateOutput,
-    );
-    if (shouldConfirm) {
-      this.shouldConfirmExecute.mockImplementation(
-        async (): Promise<ToolCallConfirmationDetails | false> => ({
-          type: 'edit',
-          title: 'Mock Tool Requires Confirmation',
-          onConfirm: mockOnUserConfirmForToolConfirmation,
-          filePath: 'mock',
-          fileName: 'mockToolRequiresConfirmation.ts',
-          fileDiff: 'Mock tool requires confirmation',
-          originalContent: 'Original content',
-          newContent: 'New content',
-        }),
-      );
-    }
-  }
-
-  execute = vi.fn();
-  shouldConfirmExecute = vi.fn();
-
-  protected createInvocation(
-    params: object,
-  ): ToolInvocation<object, ToolResult> {
-    return new MockToolInvocation(this, params);
-  }
-}
-
-const mockTool = new MockTool('mockTool', 'Mock Tool');
-const mockToolWithLiveOutput = new MockTool(
-  'mockToolWithLiveOutput',
-  'Mock Tool With Live Output',
-  true,
-);
-let mockOnUserConfirmForToolConfirmation: Mock;
-const mockToolRequiresConfirmation = new MockTool(
-  'mockToolRequiresConfirmation',
-  'Mock Tool Requires Confirmation',
-  false,
-  true,
-);
-
-describe('useReactToolScheduler in YOLO Mode', () => {
-  let onComplete: Mock;
-  let setPendingHistoryItem: Mock;
+describe('useToolScheduler', () => {
+  let mockConfig: Config;
+  let mockMessageBus: MessageBus;
 
   beforeEach(() => {
-    onComplete = vi.fn();
-    setPendingHistoryItem = vi.fn();
-    mockToolRegistry.getTool.mockClear();
-    (mockToolRequiresConfirmation.execute as Mock).mockClear();
-    (mockToolRequiresConfirmation.shouldConfirmExecute as Mock).mockClear();
-
-    // IMPORTANT: Enable YOLO mode for this test suite
-    (mockConfig.getApprovalMode as Mock).mockReturnValue(ApprovalMode.YOLO);
-
-    vi.useFakeTimers();
+    vi.clearAllMocks();
+    mockMessageBus = createMockMessageBus() as unknown as MessageBus;
+    mockConfig = {
+      getMessageBus: () => mockMessageBus,
+    } as unknown as Config;
   });
 
   afterEach(() => {
-    vi.clearAllTimers();
-    vi.useRealTimers();
-    // IMPORTANT: Disable YOLO mode after this test suite
-    (mockConfig.getApprovalMode as Mock).mockReturnValue(ApprovalMode.DEFAULT);
+    vi.clearAllMocks();
   });
 
-  const renderSchedulerInYoloMode = () =>
-    renderHook(() =>
-      useReactToolScheduler(
-        onComplete,
-        mockConfig as unknown as Config,
-        setPendingHistoryItem,
+  it('initializes with empty tool calls', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
         () => undefined,
-        () => {},
+      ),
+    );
+    const [toolCalls] = result.current;
+    expect(toolCalls).toEqual([]);
+  });
+
+  it('updates tool calls when MessageBus emits TOOL_CALLS_UPDATE', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
       ),
     );
 
-  it('should skip confirmation and execute tool directly when yoloMode is true', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockToolRequiresConfirmation);
-    const expectedOutput = 'YOLO Confirmed output';
-    (mockToolRequiresConfirmation.execute as Mock).mockResolvedValue({
-      llmContent: expectedOutput,
-      returnDisplay: 'YOLO Formatted tool output',
-    } as ToolResult);
-
-    const { result } = renderSchedulerInYoloMode();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'yoloCall',
-      name: 'mockToolRequiresConfirmation',
-      args: { data: 'any data' },
-    } as any;
+    const mockToolCall = {
+      status: CoreToolCallStatus.Executing as const,
+      request: {
+        callId: 'call-1',
+        name: 'test_tool',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      liveOutput: 'Loading...',
+    } as ExecutingToolCall;
 
     act(() => {
-      schedule(request, new AbortController().signal);
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [mockToolCall],
+        schedulerId: ROOT_SCHEDULER_ID,
+      } as ToolCallsUpdateMessage);
     });
 
-    await act(async () => {
-      await vi.runAllTimersAsync(); // Process validation
+    const [toolCalls] = result.current;
+    expect(toolCalls).toHaveLength(1);
+    // Expect Core Object structure, not Display Object
+    expect(toolCalls[0]).toMatchObject({
+      request: { callId: 'call-1', name: 'test_tool' },
+      status: CoreToolCallStatus.Executing,
+      liveOutput: 'Loading...',
+      responseSubmittedToGemini: false,
     });
-    await act(async () => {
-      await vi.runAllTimersAsync(); // Process scheduling
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync(); // Process execution
-    });
+  });
 
-    // Check that execute WAS called
-    expect(mockToolRequiresConfirmation.execute).toHaveBeenCalledWith(
-      request.args,
-      expect.any(AbortSignal),
-      undefined,
-      undefined,
-      undefined,
+  it('preserves responseSubmittedToGemini flag across updates', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
+      ),
     );
 
-    // Check that onComplete was called with success
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'success',
-        request,
-        response: expect.objectContaining({
-          resultDisplay: 'YOLO Formatted tool output',
-          responseParts: [
-            {
-              functionResponse: {
-                id: 'yoloCall',
-                name: 'mockToolRequiresConfirmation',
-                response: { output: expectedOutput },
-              },
-            },
-          ],
-        }),
-      }),
-    ]);
+    const mockToolCall = {
+      status: CoreToolCallStatus.Success as const,
+      request: {
+        callId: 'call-1',
+        name: 'test',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      response: {
+        callId: 'call-1',
+        resultDisplay: 'OK',
+        responseParts: [],
+        error: undefined,
+        errorType: undefined,
+      },
+    };
 
-    // Ensure no confirmation UI was triggered (setPendingHistoryItem should not have been called with confirmation details)
-    const setPendingHistoryItemCalls = setPendingHistoryItem.mock.calls;
-    const confirmationCall = setPendingHistoryItemCalls.find((call) => {
-      const item = typeof call[0] === 'function' ? call[0]({}) : call[0];
-      return item?.tools?.[0]?.confirmationDetails;
+    // 1. Initial success
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [mockToolCall],
+        schedulerId: ROOT_SCHEDULER_ID,
+      } as ToolCallsUpdateMessage);
     });
-    expect(confirmationCall).toBeUndefined();
+
+    // 2. Mark as submitted
+    act(() => {
+      const [, , markAsSubmitted] = result.current;
+      markAsSubmitted(['call-1']);
+    });
+
+    expect(result.current[0][0].responseSubmittedToGemini).toBe(true);
+
+    // 3. Receive another update (should preserve the true flag)
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [mockToolCall],
+        schedulerId: ROOT_SCHEDULER_ID,
+      } as ToolCallsUpdateMessage);
+    });
+
+    expect(result.current[0][0].responseSubmittedToGemini).toBe(true);
   });
-});
 
-describe('useReactToolScheduler', () => {
-  // TODO(ntaylormullen): The following tests are skipped due to difficulties in
-  // reliably testing the asynchronous state updates and interactions with timers.
-  // These tests involve complex sequences of events, including confirmations,
-  // live output updates, and cancellations, which are challenging to assert
-  // correctly with the current testing setup. Further investigation is needed
-  // to find a robust way to test these scenarios.
-  let onComplete: Mock;
-  let setPendingHistoryItem: Mock;
-  let capturedOnConfirmForTest:
-    | ((outcome: ToolConfirmationOutcome) => void | Promise<void>)
-    | undefined;
+  it('updates lastToolOutputTime when tools are executing', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
+      ),
+    );
 
-  beforeEach(() => {
-    onComplete = vi.fn();
-    capturedOnConfirmForTest = undefined;
-    setPendingHistoryItem = vi.fn((updaterOrValue) => {
-      let pendingItem: HistoryItemWithoutId | null = null;
-      if (typeof updaterOrValue === 'function') {
-        // Loosen the type for prevState to allow for more flexible updates in tests
-        const prevState: Partial<HistoryItemToolGroup> = {
-          type: 'tool_group', // Still default to tool_group for most cases
-          tools: [],
-        };
+    const startTime = Date.now();
+    vi.advanceTimersByTime(1000);
 
-        pendingItem = updaterOrValue(prevState as any); // Allow any for more flexibility
-      } else {
-        pendingItem = updaterOrValue;
-      }
-      // Capture onConfirm if it exists, regardless of the exact type of pendingItem
-      // This is a common pattern in these tests.
-      if (
-        (pendingItem as HistoryItemToolGroup)?.tools?.[0]?.confirmationDetails
-          ?.onConfirm
-      ) {
-        capturedOnConfirmForTest = (pendingItem as HistoryItemToolGroup)
-          .tools[0].confirmationDetails?.onConfirm;
-      }
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [
+          {
+            status: CoreToolCallStatus.Executing as const,
+            request: {
+              callId: 'call-1',
+              name: 'test',
+              args: {},
+              isClientInitiated: false,
+              prompt_id: 'p1',
+            },
+            tool: createMockTool(),
+            invocation: createMockInvocation(),
+          },
+        ],
+        schedulerId: ROOT_SCHEDULER_ID,
+      } as ToolCallsUpdateMessage);
     });
 
-    mockToolRegistry.getTool.mockClear();
-    (mockTool.execute as Mock).mockClear();
-    (mockTool.shouldConfirmExecute as Mock).mockClear();
-    (mockToolWithLiveOutput.execute as Mock).mockClear();
-    (mockToolWithLiveOutput.shouldConfirmExecute as Mock).mockClear();
-    (mockToolRequiresConfirmation.execute as Mock).mockClear();
-    (mockToolRequiresConfirmation.shouldConfirmExecute as Mock).mockClear();
+    const [, , , , , lastOutputTime] = result.current;
+    expect(lastOutputTime).toBeGreaterThan(startTime);
+    vi.useRealTimers();
+  });
 
-    mockOnUserConfirmForToolConfirmation = vi.fn();
-    (
-      mockToolRequiresConfirmation.shouldConfirmExecute as Mock
-    ).mockImplementation(
-      async (): Promise<ToolCallConfirmationDetails | null> =>
+  it('delegates cancelAll to the Core Scheduler', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
+      ),
+    );
+
+    const [, , , , cancelAll] = result.current;
+    const signal = new AbortController().signal;
+
+    // We need to find the mock instance of Scheduler
+    // Since we used vi.mock at top level, we can get it from vi.mocked(Scheduler)
+    const schedulerInstance = vi.mocked(Scheduler).mock.results[0].value;
+
+    cancelAll(signal);
+
+    expect(schedulerInstance.cancelAll).toHaveBeenCalled();
+  });
+
+  it('resolves the schedule promise when scheduler resolves', async () => {
+    const onComplete = vi.fn().mockResolvedValue(undefined);
+
+    const completedToolCall = {
+      status: CoreToolCallStatus.Success as const,
+      request: {
+        callId: 'call-1',
+        name: 'test',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      response: {
+        callId: 'call-1',
+        responseParts: [],
+        resultDisplay: 'Success',
+        error: undefined,
+        errorType: undefined,
+      },
+    };
+
+    // Mock the specific return value for this test
+    const { Scheduler } = await import('@google/gemini-cli-core');
+    vi.mocked(Scheduler).mockImplementation(
+      () =>
         ({
-          onConfirm: mockOnUserConfirmForToolConfirmation,
-          fileName: 'mockToolRequiresConfirmation.ts',
-          fileDiff: 'Mock tool requires confirmation',
-          type: 'edit',
-          title: 'Mock Tool Requires Confirmation',
-        }) as any,
+          schedule: vi.fn().mockResolvedValue([completedToolCall]),
+          cancelAll: vi.fn(),
+        }) as unknown as Scheduler,
     );
 
-    vi.useFakeTimers();
+    const { result } = renderHook(() =>
+      useToolScheduler(onComplete, mockConfig, () => undefined),
+    );
+
+    const [, schedule] = result.current;
+    const signal = new AbortController().signal;
+
+    let completedResult: CompletedToolCall[] = [];
+    await act(async () => {
+      completedResult = await schedule(
+        {
+          callId: 'call-1',
+          name: 'test',
+          args: {},
+          isClientInitiated: false,
+          prompt_id: 'p1',
+        },
+        signal,
+      );
+    });
+
+    expect(completedResult).toEqual([completedToolCall]);
+    expect(onComplete).toHaveBeenCalledWith([completedToolCall]);
   });
 
-  afterEach(() => {
-    vi.clearAllTimers();
-    vi.useRealTimers();
-  });
-
-  const renderScheduler = () =>
-    renderHook(() =>
-      useReactToolScheduler(
-        onComplete,
-        mockConfig as unknown as Config,
-        setPendingHistoryItem,
+  it('setToolCallsForDisplay re-groups tools by schedulerId (Multi-Scheduler support)', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
         () => undefined,
-        () => {},
       ),
     );
 
-  it('initial state should be empty', () => {
-    const { result } = renderScheduler();
-    expect(result.current[0]).toEqual([]);
-  });
-
-  it('should schedule and execute a tool call successfully', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockTool);
-    (mockTool.execute as Mock).mockResolvedValue({
-      llmContent: 'Tool output',
-      returnDisplay: 'Formatted tool output',
-    } as ToolResult);
-    (mockTool.shouldConfirmExecute as Mock).mockResolvedValue(null);
-
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'call1',
-      name: 'mockTool',
-      args: { param: 'value' },
-    } as any;
-
-    act(() => {
-      schedule(request, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(mockTool.execute).toHaveBeenCalledWith(
-      request.args,
-      expect.any(AbortSignal),
-      undefined,
-      undefined,
-      undefined,
-    );
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'success',
-        request,
-        response: expect.objectContaining({
-          resultDisplay: 'Formatted tool output',
-          responseParts: [
-            {
-              functionResponse: {
-                id: 'call1',
-                name: 'mockTool',
-                response: { output: 'Tool output' },
-              },
-            },
-          ],
-        }),
-      }),
-    ]);
-    expect(result.current[0]).toEqual([]);
-  });
-
-  it('should handle tool not found', async () => {
-    mockToolRegistry.getTool.mockReturnValue(undefined);
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'call1',
-      name: 'nonexistentTool',
-      args: {},
-    } as any;
-
-    act(() => {
-      schedule(request, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'error',
-        request,
-        response: expect.objectContaining({
-          error: expect.objectContaining({
-            message: 'Tool "nonexistentTool" not found in registry.',
-          }),
-        }),
-      }),
-    ]);
-    expect(result.current[0]).toEqual([]);
-  });
-
-  it('should handle error during shouldConfirmExecute', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockTool);
-    const confirmError = new Error('Confirmation check failed');
-    (mockTool.shouldConfirmExecute as Mock).mockRejectedValue(confirmError);
-
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'call1',
-      name: 'mockTool',
-      args: {},
-    } as any;
-
-    act(() => {
-      schedule(request, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'error',
-        request,
-        response: expect.objectContaining({
-          error: confirmError,
-        }),
-      }),
-    ]);
-    expect(result.current[0]).toEqual([]);
-  });
-
-  it('should handle error during execute', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockTool);
-    (mockTool.shouldConfirmExecute as Mock).mockResolvedValue(null);
-    const execError = new Error('Execution failed');
-    (mockTool.execute as Mock).mockRejectedValue(execError);
-
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'call1',
-      name: 'mockTool',
-      args: {},
-    } as any;
-
-    act(() => {
-      schedule(request, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'error',
-        request,
-        response: expect.objectContaining({
-          error: execError,
-        }),
-      }),
-    ]);
-    expect(result.current[0]).toEqual([]);
-  });
-
-  it.skip('should handle tool requiring confirmation - approved', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockToolRequiresConfirmation);
-    const expectedOutput = 'Confirmed output';
-    (mockToolRequiresConfirmation.execute as Mock).mockResolvedValue({
-      llmContent: expectedOutput,
-      returnDisplay: 'Confirmed display',
-    } as ToolResult);
-
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'callConfirm',
-      name: 'mockToolRequiresConfirmation',
-      args: { data: 'sensitive' },
-    } as any;
-
-    act(() => {
-      schedule(request, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(setPendingHistoryItem).toHaveBeenCalled();
-    expect(capturedOnConfirmForTest).toBeDefined();
-
-    await act(async () => {
-      await capturedOnConfirmForTest?.(ToolConfirmationOutcome.ProceedOnce);
-    });
-
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(mockOnUserConfirmForToolConfirmation).toHaveBeenCalledWith(
-      ToolConfirmationOutcome.ProceedOnce,
-    );
-    expect(mockToolRequiresConfirmation.execute).toHaveBeenCalled();
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'success',
-        request,
-        response: expect.objectContaining({
-          resultDisplay: 'Confirmed display',
-          responseParts: expect.arrayContaining([
-            expect.objectContaining({
-              functionResponse: expect.objectContaining({
-                response: { output: expectedOutput },
-              }),
-            }),
-          ]),
-        }),
-      }),
-    ]);
-  });
-
-  it.skip('should handle tool requiring confirmation - cancelled by user', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockToolRequiresConfirmation);
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'callConfirmCancel',
-      name: 'mockToolRequiresConfirmation',
-      args: {},
-    } as any;
-
-    act(() => {
-      schedule(request, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(setPendingHistoryItem).toHaveBeenCalled();
-    expect(capturedOnConfirmForTest).toBeDefined();
-
-    await act(async () => {
-      await capturedOnConfirmForTest?.(ToolConfirmationOutcome.Cancel);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(mockOnUserConfirmForToolConfirmation).toHaveBeenCalledWith(
-      ToolConfirmationOutcome.Cancel,
-    );
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'cancelled',
-        request,
-        response: expect.objectContaining({
-          responseParts: expect.arrayContaining([
-            expect.objectContaining({
-              functionResponse: expect.objectContaining({
-                response: expect.objectContaining({
-                  error: `User did not allow tool call ${request.name}. Reason: User cancelled.`,
-                }),
-              }),
-            }),
-          ]),
-        }),
-      }),
-    ]);
-  });
-
-  it.skip('should handle live output updates', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockToolWithLiveOutput);
-    let liveUpdateFn: ((output: string) => void) | undefined;
-    let resolveExecutePromise: (value: ToolResult) => void;
-    const executePromise = new Promise<ToolResult>((resolve) => {
-      resolveExecutePromise = resolve;
-    });
-
-    (mockToolWithLiveOutput.execute as Mock).mockImplementation(
-      async (
-        _args: Record<string, unknown>,
-        _signal: AbortSignal,
-        updateFn: ((output: string) => void) | undefined,
-      ) => {
-        liveUpdateFn = updateFn;
-        return executePromise;
+    const callRoot = {
+      status: CoreToolCallStatus.Success as const,
+      request: {
+        callId: 'call-root',
+        name: 'test',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
       },
-    );
-    (mockToolWithLiveOutput.shouldConfirmExecute as Mock).mockResolvedValue(
-      null,
-    );
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      response: {
+        callId: 'call-root',
+        responseParts: [],
+        resultDisplay: 'OK',
+        error: undefined,
+        errorType: undefined,
+      },
+      schedulerId: ROOT_SCHEDULER_ID,
+    };
 
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request: ToolCallRequestInfo = {
-      callId: 'liveCall',
-      name: 'mockToolWithLiveOutput',
-      args: {},
-    } as any;
+    const callSub = {
+      ...callRoot,
+      request: { ...callRoot.request, callId: 'call-sub' },
+      status: CoreToolCallStatus.AwaitingApproval as const, // Must be awaiting approval to be tracked
+      schedulerId: 'subagent-1',
+      confirmationDetails: { type: 'info', title: 'Confirm', prompt: 'Yes?' },
+    };
 
+    // 1. Populate state with multiple schedulers
     act(() => {
-      schedule(request, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [callRoot],
+        schedulerId: ROOT_SCHEDULER_ID,
+      } as ToolCallsUpdateMessage);
+
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [callSub],
+        schedulerId: 'subagent-1',
+      } as ToolCallsUpdateMessage);
     });
 
-    expect(liveUpdateFn).toBeDefined();
-    expect(setPendingHistoryItem).toHaveBeenCalled();
+    const [toolCalls] = result.current;
+    expect(toolCalls).toHaveLength(2);
+    expect(
+      toolCalls.find((t) => t.request.callId === 'call-root'),
+    ).toBeDefined();
+    expect(
+      toolCalls.find((t) => t.request.callId === 'call-sub'),
+    ).toBeDefined();
 
-    await act(async () => {
-      liveUpdateFn?.('Live output 1');
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    await act(async () => {
-      liveUpdateFn?.('Live output 2');
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
+    // 2. Call setToolCallsForDisplay (e.g., simulate a manual update or clear)
     act(() => {
-      resolveExecutePromise({
-        llmContent: 'Final output',
-        returnDisplay: 'Final display',
-      } as ToolResult);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
+      const [, , , setToolCalls] = result.current;
+      setToolCalls((prev) =>
+        prev.map((t) => ({ ...t, responseSubmittedToGemini: true })),
+      );
     });
 
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'success',
-        request,
-        response: expect.objectContaining({
-          resultDisplay: 'Final display',
-          responseParts: expect.arrayContaining([
-            expect.objectContaining({
-              functionResponse: expect.objectContaining({
-                response: { output: 'Final output' },
-              }),
-            }),
-          ]),
-        }),
-      }),
-    ]);
-    expect(result.current[0]).toEqual([]);
+    // 3. Verify that tools are still present and maintain their scheduler IDs
+    const [toolCalls2] = result.current;
+    expect(toolCalls2).toHaveLength(2);
+    expect(toolCalls2.every((t) => t.responseSubmittedToGemini)).toBe(true);
   });
 
-  it('should schedule and execute multiple tool calls', async () => {
-    const tool1 = new MockTool('tool1', 'Tool 1');
-    tool1.execute.mockResolvedValue({
-      llmContent: 'Output 1',
-      returnDisplay: 'Display 1',
-    } as ToolResult);
-    tool1.shouldConfirmExecute.mockResolvedValue(null);
-
-    const tool2 = new MockTool('tool2', 'Tool 2');
-    tool2.execute.mockResolvedValue({
-      llmContent: 'Output 2',
-      returnDisplay: 'Display 2',
-    } as ToolResult);
-    tool2.shouldConfirmExecute.mockResolvedValue(null);
-
-    mockToolRegistry.getTool.mockImplementation((name) => {
-      if (name === 'tool1') return tool1;
-      if (name === 'tool2') return tool2;
-      return undefined;
-    });
-
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const requests: ToolCallRequestInfo[] = [
-      { callId: 'multi1', name: 'tool1', args: { p: 1 } } as any,
-      { callId: 'multi2', name: 'tool2', args: { p: 2 } } as any,
-    ];
-
-    act(() => {
-      schedule(requests, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    expect(onComplete).toHaveBeenCalledTimes(1);
-    const completedCalls = onComplete.mock.calls[0][0] as ToolCall[];
-    expect(completedCalls.length).toBe(2);
-
-    const call1Result = completedCalls.find(
-      (c) => c.request.callId === 'multi1',
-    );
-    const call2Result = completedCalls.find(
-      (c) => c.request.callId === 'multi2',
-    );
-
-    expect(call1Result).toMatchObject({
-      status: 'success',
-      request: requests[0],
-      response: expect.objectContaining({
-        resultDisplay: 'Display 1',
-        responseParts: [
-          {
-            functionResponse: {
-              id: 'multi1',
-              name: 'tool1',
-              response: { output: 'Output 1' },
-            },
-          },
-        ],
-      }),
-    });
-    expect(call2Result).toMatchObject({
-      status: 'success',
-      request: requests[1],
-      response: expect.objectContaining({
-        resultDisplay: 'Display 2',
-        responseParts: [
-          {
-            functionResponse: {
-              id: 'multi2',
-              name: 'tool2',
-              response: { output: 'Output 2' },
-            },
-          },
-        ],
-      }),
-    });
-    expect(result.current[0]).toEqual([]);
-  });
-
-  it.skip('should throw error if scheduling while already running', async () => {
-    mockToolRegistry.getTool.mockReturnValue(mockTool);
-    const longExecutePromise = new Promise<ToolResult>((resolve) =>
-      setTimeout(
-        () =>
-          resolve({
-            llmContent: 'done',
-            returnDisplay: 'done display',
-          }),
-        50,
+  it('ignores TOOL_CALLS_UPDATE from non-root schedulers when no tools await approval', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
       ),
     );
-    (mockTool.execute as Mock).mockReturnValue(longExecutePromise);
-    (mockTool.shouldConfirmExecute as Mock).mockResolvedValue(null);
 
-    const { result } = renderScheduler();
-    const schedule = result.current[1];
-    const request1: ToolCallRequestInfo = {
-      callId: 'run1',
-      name: 'mockTool',
-      args: {},
-    } as any;
-    const request2: ToolCallRequestInfo = {
-      callId: 'run2',
-      name: 'mockTool',
-      args: {},
-    } as any;
+    const subagentCall = {
+      status: CoreToolCallStatus.Executing as const,
+      request: {
+        callId: 'call-sub',
+        name: 'test',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      schedulerId: 'subagent-1',
+    };
 
     act(() => {
-      schedule(request1, new AbortController().signal);
-    });
-    await act(async () => {
-      await vi.runAllTimersAsync();
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [subagentCall],
+        schedulerId: 'subagent-1',
+      } as ToolCallsUpdateMessage);
     });
 
-    expect(() => schedule(request2, new AbortController().signal)).toThrow(
-      'Cannot schedule tool calls while other tool calls are running',
-    );
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(50);
-      await vi.runAllTimersAsync();
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-    });
-    expect(onComplete).toHaveBeenCalledWith([
-      expect.objectContaining({
-        status: 'success',
-        request: request1,
-        response: expect.objectContaining({ resultDisplay: 'done display' }),
-      }),
-    ]);
-    expect(result.current[0]).toEqual([]);
+    expect(result.current[0]).toHaveLength(0);
   });
-});
 
-describe('mapToDisplay', () => {
-  const baseRequest: ToolCallRequestInfo = {
-    callId: 'testCallId',
-    name: 'testTool',
-    args: { foo: 'bar' },
-  } as any;
-
-  const baseTool = new MockTool('testTool', 'Test Tool Display');
-
-  const baseResponse: ToolCallResponseInfo = {
-    callId: 'testCallId',
-    responseParts: [
-      {
-        functionResponse: {
-          name: 'testTool',
-          id: 'testCallId',
-          response: { output: 'Test output' },
-        } as FunctionResponse,
-      } as PartUnion,
-    ],
-    resultDisplay: 'Test display output',
-    error: undefined,
-  } as any;
-
-  // Define a more specific type for extraProps for these tests
-  // This helps ensure that tool and confirmationDetails are only accessed when they are expected to exist.
-  type MapToDisplayExtraProps =
-    | {
-        tool?: AnyDeclarativeTool;
-        invocation?: AnyToolInvocation;
-        liveOutput?: string;
-        response?: ToolCallResponseInfo;
-        confirmationDetails?: ToolCallConfirmationDetails;
-      }
-    | {
-        tool: AnyDeclarativeTool;
-        invocation?: AnyToolInvocation;
-        response?: ToolCallResponseInfo;
-        confirmationDetails?: ToolCallConfirmationDetails;
-      }
-    | {
-        response: ToolCallResponseInfo;
-        tool?: undefined;
-        confirmationDetails?: ToolCallConfirmationDetails;
-      }
-    | {
-        confirmationDetails: ToolCallConfirmationDetails;
-        tool?: AnyDeclarativeTool;
-        invocation?: AnyToolInvocation;
-        response?: ToolCallResponseInfo;
-      };
-
-  const baseInvocation = baseTool.build(baseRequest.args);
-  const testCases: Array<{
-    name: string;
-    status: ToolCallStatusType;
-    extraProps?: MapToDisplayExtraProps;
-    expectedStatus: ToolCallStatus;
-    expectedResultDisplay?: string;
-    expectedName?: string;
-    expectedDescription?: string;
-  }> = [
-    {
-      name: 'validating',
-      status: 'validating',
-      extraProps: { tool: baseTool, invocation: baseInvocation },
-      expectedStatus: ToolCallStatus.Executing,
-      expectedName: baseTool.displayName,
-      expectedDescription: baseInvocation.getDescription(),
-    },
-    {
-      name: 'awaiting_approval',
-      status: 'awaiting_approval',
-      extraProps: {
-        tool: baseTool,
-        invocation: baseInvocation,
-        confirmationDetails: {
-          onConfirm: vi.fn(),
-          type: 'edit',
-          title: 'Test Tool Display',
-          serverName: 'testTool',
-          toolName: 'testTool',
-          toolDisplayName: 'Test Tool Display',
-          filePath: 'mock',
-          fileName: 'test.ts',
-          fileDiff: 'Test diff',
-          originalContent: 'Original content',
-          newContent: 'New content',
-        } as ToolCallConfirmationDetails,
-      },
-      expectedStatus: ToolCallStatus.Confirming,
-      expectedName: baseTool.displayName,
-      expectedDescription: baseInvocation.getDescription(),
-    },
-    {
-      name: 'scheduled',
-      status: 'scheduled',
-      extraProps: { tool: baseTool, invocation: baseInvocation },
-      expectedStatus: ToolCallStatus.Pending,
-      expectedName: baseTool.displayName,
-      expectedDescription: baseInvocation.getDescription(),
-    },
-    {
-      name: 'executing no live output',
-      status: 'executing',
-      extraProps: { tool: baseTool, invocation: baseInvocation },
-      expectedStatus: ToolCallStatus.Executing,
-      expectedName: baseTool.displayName,
-      expectedDescription: baseInvocation.getDescription(),
-    },
-    {
-      name: 'executing with live output',
-      status: 'executing',
-      extraProps: {
-        tool: baseTool,
-        invocation: baseInvocation,
-        liveOutput: 'Live test output',
-      },
-      expectedStatus: ToolCallStatus.Executing,
-      expectedResultDisplay: 'Live test output',
-      expectedName: baseTool.displayName,
-      expectedDescription: baseInvocation.getDescription(),
-    },
-    {
-      name: 'success',
-      status: 'success',
-      extraProps: {
-        tool: baseTool,
-        invocation: baseInvocation,
-        response: baseResponse,
-      },
-      expectedStatus: ToolCallStatus.Success,
-      expectedResultDisplay: baseResponse.resultDisplay as any,
-      expectedName: baseTool.displayName,
-      expectedDescription: baseInvocation.getDescription(),
-    },
-    {
-      name: 'error tool not found',
-      status: 'error',
-      extraProps: {
-        response: {
-          ...baseResponse,
-          error: new Error('Test error tool not found'),
-          resultDisplay: 'Error display tool not found',
-        },
-      },
-      expectedStatus: ToolCallStatus.Error,
-      expectedResultDisplay: 'Error display tool not found',
-      expectedName: baseRequest.name,
-      expectedDescription: JSON.stringify(baseRequest.args),
-    },
-    {
-      name: 'error tool execution failed',
-      status: 'error',
-      extraProps: {
-        tool: baseTool,
-        response: {
-          ...baseResponse,
-          error: new Error('Tool execution failed'),
-          resultDisplay: 'Execution failed display',
-        },
-      },
-      expectedStatus: ToolCallStatus.Error,
-      expectedResultDisplay: 'Execution failed display',
-      expectedName: baseTool.displayName, // Changed from baseTool.name
-      expectedDescription: baseInvocation.getDescription(),
-    },
-    {
-      name: 'cancelled',
-      status: 'cancelled',
-      extraProps: {
-        tool: baseTool,
-        invocation: baseInvocation,
-        response: {
-          ...baseResponse,
-          resultDisplay: 'Cancelled display',
-        },
-      },
-      expectedStatus: ToolCallStatus.Canceled,
-      expectedResultDisplay: 'Cancelled display',
-      expectedName: baseTool.displayName,
-      expectedDescription: baseInvocation.getDescription(),
-    },
-  ];
-
-  testCases.forEach(
-    ({
-      name: testName,
-      status,
-      extraProps,
-      expectedStatus,
-      expectedResultDisplay,
-      expectedName,
-      expectedDescription,
-    }) => {
-      it(`should map ToolCall with status '${status}' (${testName}) correctly`, () => {
-        const toolCall: ToolCall = {
-          request: baseRequest,
-          status,
-          ...(extraProps || {}),
-        } as ToolCall;
-
-        const display = mapToDisplay(toolCall);
-        expect(display.type).toBe('tool_group');
-        expect(display.tools.length).toBe(1);
-        const toolDisplay = display.tools[0];
-
-        expect(toolDisplay.callId).toBe(baseRequest.callId);
-        expect(toolDisplay.status).toBe(expectedStatus);
-        expect(toolDisplay.resultDisplay).toBe(expectedResultDisplay);
-
-        expect(toolDisplay.name).toBe(expectedName);
-        expect(toolDisplay.description).toBe(expectedDescription);
-
-        expect(toolDisplay.renderOutputAsMarkdown).toBe(
-          extraProps?.tool?.isOutputMarkdown ?? false,
-        );
-        if (status === 'awaiting_approval') {
-          expect(toolDisplay.confirmationDetails).toBe(
-            extraProps!.confirmationDetails,
-          );
-        } else {
-          expect(toolDisplay.confirmationDetails).toBeUndefined();
-        }
-      });
-    },
-  );
-
-  it('should map an array of ToolCalls correctly', () => {
-    const toolCall1: ToolCall = {
-      request: { ...baseRequest, callId: 'call1' },
-      status: 'success',
-      tool: baseTool,
-      invocation: baseTool.build(baseRequest.args),
-      response: { ...baseResponse, callId: 'call1' },
-    } as ToolCall;
-    const toolForCall2 = new MockTool(
-      baseTool.name,
-      baseTool.displayName,
-      false,
-      false,
-      true,
+  it('allows TOOL_CALLS_UPDATE from non-root schedulers when tools are awaiting approval', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
+      ),
     );
-    const toolCall2: ToolCall = {
-      request: { ...baseRequest, callId: 'call2' },
-      status: 'executing',
-      tool: toolForCall2,
-      invocation: toolForCall2.build(baseRequest.args),
-      liveOutput: 'markdown output',
-    } as ToolCall;
 
-    const display = mapToDisplay([toolCall1, toolCall2]);
-    expect(display.tools.length).toBe(2);
-    expect(display.tools[0].callId).toBe('call1');
-    expect(display.tools[0].status).toBe(ToolCallStatus.Success);
-    expect(display.tools[0].renderOutputAsMarkdown).toBe(false);
-    expect(display.tools[1].callId).toBe('call2');
-    expect(display.tools[1].status).toBe(ToolCallStatus.Executing);
-    expect(display.tools[1].resultDisplay).toBe('markdown output');
-    expect(display.tools[1].renderOutputAsMarkdown).toBe(true);
+    const subagentCall = {
+      status: CoreToolCallStatus.AwaitingApproval as const,
+      request: {
+        callId: 'call-sub',
+        name: 'test',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      schedulerId: 'subagent-1',
+      confirmationDetails: { type: 'info', title: 'Confirm', prompt: 'Yes?' },
+    } as WaitingToolCall;
+
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [subagentCall],
+        schedulerId: 'subagent-1',
+      } as ToolCallsUpdateMessage);
+    });
+
+    const [toolCalls] = result.current;
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].request.callId).toBe('call-sub');
+    expect(toolCalls[0].status).toBe(CoreToolCallStatus.AwaitingApproval);
+  });
+
+  it('preserves subagent tools in the UI after they have been approved', () => {
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
+      ),
+    );
+
+    const subagentCall = {
+      status: CoreToolCallStatus.AwaitingApproval as const,
+      request: {
+        callId: 'call-sub',
+        name: 'test',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      schedulerId: 'subagent-1',
+      confirmationDetails: { type: 'info', title: 'Confirm', prompt: 'Yes?' },
+    } as WaitingToolCall;
+
+    // 1. Initial approval request
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [subagentCall],
+        schedulerId: 'subagent-1',
+      } as ToolCallsUpdateMessage);
+    });
+
+    expect(result.current[0]).toHaveLength(1);
+
+    // 2. Approved and executing
+    const approvedCall = {
+      ...subagentCall,
+      status: CoreToolCallStatus.Executing as const,
+    } as unknown as ExecutingToolCall;
+
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [approvedCall],
+        schedulerId: 'subagent-1',
+      } as ToolCallsUpdateMessage);
+    });
+
+    expect(result.current[0]).toHaveLength(1);
+    expect(result.current[0][0].status).toBe(CoreToolCallStatus.Executing);
+
+    // 3. New turn with a background tool (should NOT be shown)
+    const backgroundTool = {
+      status: CoreToolCallStatus.Executing as const,
+      request: {
+        callId: 'call-background',
+        name: 'read_file',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      schedulerId: 'subagent-1',
+    } as ExecutingToolCall;
+
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [backgroundTool],
+        schedulerId: 'subagent-1',
+      } as ToolCallsUpdateMessage);
+    });
+
+    // The subagent list should now be empty because the previously approved tool
+    // is gone from the current list, and the new tool doesn't need approval.
+    expect(result.current[0]).toHaveLength(0);
+  });
+
+  it('adapts success/error status to executing when a tail call is present', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() =>
+      useToolScheduler(
+        vi.fn().mockResolvedValue(undefined),
+        mockConfig,
+        () => undefined,
+      ),
+    );
+
+    const startTime = Date.now();
+    vi.advanceTimersByTime(1000);
+
+    const mockToolCall = {
+      status: CoreToolCallStatus.Success as const,
+      request: {
+        callId: 'call-1',
+        name: 'test_tool',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: 'p1',
+      },
+      tool: createMockTool(),
+      invocation: createMockInvocation(),
+      response: {
+        callId: 'call-1',
+        resultDisplay: 'OK',
+        responseParts: [],
+        error: undefined,
+        errorType: undefined,
+      },
+      tailToolCallRequest: {
+        name: 'tail_tool',
+        args: {},
+        isClientInitiated: false,
+        prompt_id: '123',
+      },
+    };
+
+    act(() => {
+      void mockMessageBus.publish({
+        type: MessageBusType.TOOL_CALLS_UPDATE,
+        toolCalls: [mockToolCall],
+        schedulerId: ROOT_SCHEDULER_ID,
+      } as ToolCallsUpdateMessage);
+    });
+
+    const [toolCalls, , , , , lastOutputTime] = result.current;
+
+    // Check if status has been adapted to 'executing'
+    expect(toolCalls[0].status).toBe(CoreToolCallStatus.Executing);
+
+    // Check if lastOutputTime was updated due to the transitional state
+    expect(lastOutputTime).toBeGreaterThan(startTime);
+
+    vi.useRealTimers();
   });
 });

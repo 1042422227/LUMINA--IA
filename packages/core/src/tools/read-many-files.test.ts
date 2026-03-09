@@ -4,12 +4,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import type { Mock } from 'vitest';
+import {
+  vi,
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  type Mock,
+} from 'vitest';
 import { mockControl } from '../__mocks__/fs/promises.js';
 import { ReadManyFilesTool } from './read-many-files.js';
 import { FileDiscoveryService } from '../services/fileDiscoveryService.js';
 import path from 'node:path';
+import { isSubpath } from '../utils/paths.js';
 import fs from 'node:fs'; // Actual fs for setup
 import os from 'node:os';
 import type { Config } from '../config/config.js';
@@ -21,11 +29,13 @@ import {
   DEFAULT_FILE_EXCLUDES,
 } from '../utils/ignorePatterns.js';
 import * as glob from 'glob';
+import { createMockMessageBus } from '../test-utils/mock-message-bus.js';
+import { GEMINI_IGNORE_FILE_NAME } from '../config/constants.js';
 
 vi.mock('glob', { spy: true });
 
-vi.mock('mime-types', () => {
-  const lookup = (filename: string) => {
+vi.mock('mime', () => {
+  const getType = (filename: string) => {
     if (filename.endsWith('.ts') || filename.endsWith('.js')) {
       return 'text/plain';
     }
@@ -45,9 +55,9 @@ vi.mock('mime-types', () => {
   };
   return {
     default: {
-      lookup,
+      getType,
     },
-    lookup,
+    getType,
   };
 });
 
@@ -68,7 +78,7 @@ describe('ReadManyFilesTool', () => {
     tempDirOutsideRoot = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), 'read-many-files-external-')),
     );
-    fs.writeFileSync(path.join(tempRootDir, '.geminiignore'), 'foo.*');
+    fs.writeFileSync(path.join(tempRootDir, GEMINI_IGNORE_FILE_NAME), 'foo.*');
     const fileService = new FileDiscoveryService(tempRootDir);
     const mockConfig = {
       getFileService: () => fileService,
@@ -77,6 +87,7 @@ describe('ReadManyFilesTool', () => {
       getFileFilteringOptions: () => ({
         respectGitIgnore: true,
         respectGeminiIgnore: true,
+        customIgnoreFilePaths: [],
       }),
       getTargetDir: () => tempRootDir,
       getWorkspaceDirs: () => [tempRootDir],
@@ -88,8 +99,30 @@ describe('ReadManyFilesTool', () => {
         buildExcludePatterns: () => DEFAULT_FILE_EXCLUDES,
         getReadManyFilesExcludes: () => DEFAULT_FILE_EXCLUDES,
       }),
-    } as Partial<Config> as Config;
-    tool = new ReadManyFilesTool(mockConfig);
+      isInteractive: () => false,
+      storage: {
+        getProjectTempDir: vi.fn().mockReturnValue('/tmp/project'),
+      },
+      isPathAllowed(this: Config, absolutePath: string): boolean {
+        const workspaceContext = this.getWorkspaceContext();
+        if (workspaceContext.isPathWithinWorkspace(absolutePath)) {
+          return true;
+        }
+
+        const projectTempDir = this.storage.getProjectTempDir();
+        return isSubpath(path.resolve(projectTempDir), absolutePath);
+      },
+      validatePathAccess(this: Config, absolutePath: string): string | null {
+        if (this.isPathAllowed(absolutePath)) {
+          return null;
+        }
+
+        const workspaceDirs = this.getWorkspaceContext().getDirectories();
+        const projectTempDir = this.storage.getProjectTempDir();
+        return `Path not in workspace: Attempted path "${absolutePath}" resolves outside the allowed workspace directories: ${workspaceDirs.join(', ')} or the project temp directory: ${projectTempDir}`;
+      },
+    } as unknown as Config;
+    tool = new ReadManyFilesTool(mockConfig, createMockMessageBus());
 
     mockReadFileFn = mockControl.mockReadFile;
     mockReadFileFn.mockReset();
@@ -144,56 +177,56 @@ describe('ReadManyFilesTool', () => {
 
   describe('build', () => {
     it('should return an invocation for valid relative paths within root', () => {
-      const params = { paths: ['file1.txt', 'subdir/file2.txt'] };
+      const params = { include: ['file1.txt', 'subdir/file2.txt'] };
       const invocation = tool.build(params);
       expect(invocation).toBeDefined();
     });
 
     it('should return an invocation for valid glob patterns within root', () => {
-      const params = { paths: ['*.txt', 'subdir/**/*.js'] };
+      const params = { include: ['*.txt', 'subdir/**/*.js'] };
       const invocation = tool.build(params);
       expect(invocation).toBeDefined();
     });
 
     it('should return an invocation for paths trying to escape the root (e.g., ../) as execute handles this', () => {
-      const params = { paths: ['../outside.txt'] };
+      const params = { include: ['../outside.txt'] };
       const invocation = tool.build(params);
       expect(invocation).toBeDefined();
     });
 
     it('should return an invocation for absolute paths as execute handles this', () => {
-      const params = { paths: [path.join(tempDirOutsideRoot, 'absolute.txt')] };
+      const params = {
+        include: [path.join(tempDirOutsideRoot, 'absolute.txt')],
+      };
       const invocation = tool.build(params);
       expect(invocation).toBeDefined();
     });
 
     it('should throw error if paths array is empty', () => {
-      const params = { paths: [] };
+      const params = { include: [] };
       expect(() => tool.build(params)).toThrow(
-        'params/paths must NOT have fewer than 1 items',
+        'params/include must NOT have fewer than 1 items',
       );
     });
 
     it('should return an invocation for valid exclude and include patterns', () => {
       const params = {
-        paths: ['src/**/*.ts'],
         exclude: ['**/*.test.ts'],
-        include: ['src/utils/*.ts'],
+        include: ['src/**/*.ts', 'src/utils/*.ts'],
       };
       const invocation = tool.build(params);
       expect(invocation).toBeDefined();
     });
 
     it('should throw error if paths array contains an empty string', () => {
-      const params = { paths: ['file1.txt', ''] };
+      const params = { include: ['file1.txt', ''] };
       expect(() => tool.build(params)).toThrow(
-        'params/paths/1 must NOT have fewer than 1 characters',
+        'params/include/1 must NOT have fewer than 1 characters',
       );
     });
 
     it('should throw error if include array contains non-string elements', () => {
       const params = {
-        paths: ['file1.txt'],
         include: ['*.ts', 123] as string[],
       };
       expect(() => tool.build(params)).toThrow(
@@ -203,7 +236,7 @@ describe('ReadManyFilesTool', () => {
 
     it('should throw error if exclude array contains non-string elements', () => {
       const params = {
-        paths: ['file1.txt'],
+        include: ['file1.txt'],
         exclude: ['*.log', {}] as string[],
       };
       expect(() => tool.build(params)).toThrow(
@@ -226,7 +259,7 @@ describe('ReadManyFilesTool', () => {
 
     it('should read a single specified file', async () => {
       createFile('file1.txt', 'Content of file1');
-      const params = { paths: ['file1.txt'] };
+      const params = { include: ['file1.txt'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const expectedPath = path.join(tempRootDir, 'file1.txt');
@@ -242,7 +275,7 @@ describe('ReadManyFilesTool', () => {
     it('should read multiple specified files', async () => {
       createFile('file1.txt', 'Content1');
       createFile('subdir/file2.js', 'Content2');
-      const params = { paths: ['file1.txt', 'subdir/file2.js'] };
+      const params = { include: ['file1.txt', 'subdir/file2.js'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -267,7 +300,7 @@ describe('ReadManyFilesTool', () => {
       createFile('file.txt', 'Text file');
       createFile('another.txt', 'Another text');
       createFile('sub/data.json', '{}');
-      const params = { paths: ['*.txt'] };
+      const params = { include: ['*.txt'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -292,7 +325,7 @@ describe('ReadManyFilesTool', () => {
     it('should respect exclude patterns', async () => {
       createFile('src/main.ts', 'Main content');
       createFile('src/main.test.ts', 'Test content');
-      const params = { paths: ['src/**/*.ts'], exclude: ['**/*.test.ts'] };
+      const params = { include: ['src/**/*.ts'], exclude: ['**/*.test.ts'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -310,7 +343,7 @@ describe('ReadManyFilesTool', () => {
     });
 
     it('should handle nonexistent specific files gracefully', async () => {
-      const params = { paths: ['nonexistent-file.txt'] };
+      const params = { include: ['nonexistent-file.txt'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       expect(result.llmContent).toEqual([
@@ -324,7 +357,7 @@ describe('ReadManyFilesTool', () => {
     it('should use default excludes', async () => {
       createFile('node_modules/some-lib/index.js', 'lib code');
       createFile('src/app.js', 'app code');
-      const params = { paths: ['**/*.js'] };
+      const params = { include: ['**/*.js'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -344,7 +377,7 @@ describe('ReadManyFilesTool', () => {
     it('should NOT use default excludes if useDefaultExcludes is false', async () => {
       createFile('node_modules/some-lib/index.js', 'lib code');
       createFile('src/app.js', 'app code');
-      const params = { paths: ['**/*.js'], useDefaultExcludes: false };
+      const params = { include: ['**/*.js'], useDefaultExcludes: false };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -373,7 +406,7 @@ describe('ReadManyFilesTool', () => {
         'image.png',
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       );
-      const params = { paths: ['*.png'] }; // Explicitly requesting .png
+      const params = { include: ['*.png'] }; // Explicitly requesting .png
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       expect(result.llmContent).toEqual([
@@ -397,7 +430,7 @@ describe('ReadManyFilesTool', () => {
         'myExactImage.png',
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       );
-      const params = { paths: ['myExactImage.png'] }; // Explicitly requesting by full name
+      const params = { include: ['myExactImage.png'] }; // Explicitly requesting by full name
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       expect(result.llmContent).toEqual([
@@ -416,7 +449,7 @@ describe('ReadManyFilesTool', () => {
     it('should skip PDF files if not explicitly requested by extension or name', async () => {
       createBinaryFile('document.pdf', Buffer.from('%PDF-1.4...'));
       createFile('notes.txt', 'text notes');
-      const params = { paths: ['*'] }; // Generic glob, not specific to .pdf
+      const params = { include: ['*'] }; // Generic glob, not specific to .pdf
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -430,13 +463,13 @@ describe('ReadManyFilesTool', () => {
       ).toBe(true);
       expect(result.returnDisplay).toContain('**Skipped 1 item(s):**');
       expect(result.returnDisplay).toContain(
-        '- `document.pdf` (Reason: asset file (image/pdf) was not explicitly requested by name or extension)',
+        '- `document.pdf` (Reason: asset file (image/pdf/audio) was not explicitly requested by name or extension)',
       );
     });
 
     it('should include PDF files as inlineData parts if explicitly requested by extension', async () => {
       createBinaryFile('important.pdf', Buffer.from('%PDF-1.4...'));
-      const params = { paths: ['*.pdf'] }; // Explicitly requesting .pdf files
+      const params = { include: ['*.pdf'] }; // Explicitly requesting .pdf files
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       expect(result.llmContent).toEqual([
@@ -452,7 +485,7 @@ describe('ReadManyFilesTool', () => {
 
     it('should include PDF files as inlineData parts if explicitly requested by name', async () => {
       createBinaryFile('report-final.pdf', Buffer.from('%PDF-1.4...'));
-      const params = { paths: ['report-final.pdf'] };
+      const params = { include: ['report-final.pdf'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       expect(result.llmContent).toEqual([
@@ -470,7 +503,7 @@ describe('ReadManyFilesTool', () => {
       createFile('foo.bar', '');
       createFile('bar.ts', '');
       createFile('foo.quux', '');
-      const params = { paths: ['foo.bar', 'bar.ts', 'foo.quux'] };
+      const params = { include: ['foo.bar', 'bar.ts', 'foo.quux'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       expect(result.returnDisplay).not.toContain('foo.bar');
@@ -492,6 +525,7 @@ describe('ReadManyFilesTool', () => {
         getFileFilteringOptions: () => ({
           respectGitIgnore: true,
           respectGeminiIgnore: true,
+          customIgnoreFilePaths: [],
         }),
         getWorkspaceContext: () => new WorkspaceContext(tempDir1, [tempDir2]),
         getTargetDir: () => tempDir1,
@@ -502,13 +536,35 @@ describe('ReadManyFilesTool', () => {
           buildExcludePatterns: () => [],
           getReadManyFilesExcludes: () => [],
         }),
-      } as Partial<Config> as Config;
-      tool = new ReadManyFilesTool(mockConfig);
+        isInteractive: () => false,
+        storage: {
+          getProjectTempDir: vi.fn().mockReturnValue('/tmp/project'),
+        },
+        isPathAllowed(this: Config, absolutePath: string): boolean {
+          const workspaceContext = this.getWorkspaceContext();
+          if (workspaceContext.isPathWithinWorkspace(absolutePath)) {
+            return true;
+          }
+
+          const projectTempDir = this.storage.getProjectTempDir();
+          return isSubpath(path.resolve(projectTempDir), absolutePath);
+        },
+        validatePathAccess(this: Config, absolutePath: string): string | null {
+          if (this.isPathAllowed(absolutePath)) {
+            return null;
+          }
+
+          const workspaceDirs = this.getWorkspaceContext().getDirectories();
+          const projectTempDir = this.storage.getProjectTempDir();
+          return `Path not in workspace: Attempted path "${absolutePath}" resolves outside the allowed workspace directories: ${workspaceDirs.join(', ')} or the project temp directory: ${projectTempDir}`;
+        },
+      } as unknown as Config;
+      tool = new ReadManyFilesTool(mockConfig, createMockMessageBus());
 
       fs.writeFileSync(path.join(tempDir1, 'file1.txt'), 'Content1');
       fs.writeFileSync(path.join(tempDir2, 'file2.txt'), 'Content2');
 
-      const params = { paths: ['*.txt'] };
+      const params = { include: ['*.txt'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -544,7 +600,7 @@ describe('ReadManyFilesTool', () => {
       );
       createFile('large-file.txt', longContent);
 
-      const params = { paths: ['*.txt'] };
+      const params = { include: ['*.txt'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const content = result.llmContent as string[];
@@ -568,7 +624,7 @@ describe('ReadManyFilesTool', () => {
     it('should read files with special characters like [] and () in the path', async () => {
       const filePath = 'src/app/[test]/(dashboard)/testing/components/code.tsx';
       createFile(filePath, 'Content of receive-detail');
-      const params = { paths: [filePath] };
+      const params = { include: [filePath] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const expectedPath = path.join(tempRootDir, filePath);
@@ -587,7 +643,7 @@ Content of receive-detail
 
     it('should read files with special characters in the name', async () => {
       createFile('file[1].txt', 'Content of file[1]');
-      const params = { paths: ['file[1].txt'] };
+      const params = { include: ['file[1].txt'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       const expectedPath = path.join(tempRootDir, 'file[1].txt');
@@ -607,15 +663,15 @@ Content of file[1]
 
   describe('Error handling', () => {
     it('should return an INVALID_TOOL_PARAMS error if no paths are provided', async () => {
-      const params = { paths: [], include: [] };
+      const params = { include: [] };
       expect(() => {
         tool.build(params);
-      }).toThrow('params/paths must NOT have fewer than 1 items');
+      }).toThrow('params/include must NOT have fewer than 1 items');
     });
 
     it('should return a READ_MANY_FILES_SEARCH_ERROR on glob failure', async () => {
       vi.mocked(glob.glob).mockRejectedValue(new Error('Glob failed'));
-      const params = { paths: ['*.txt'] };
+      const params = { include: ['*.txt'] };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
       expect(result.error?.type).toBe(
@@ -661,7 +717,7 @@ Content of file[1]
         return 'text';
       });
 
-      const params = { paths: files };
+      const params = { include: files };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
 
@@ -684,7 +740,7 @@ Content of file[1]
       createFile('valid3.txt', 'Valid content 3');
 
       const params = {
-        paths: [
+        include: [
           'valid1.txt',
           'valid2.txt',
           'nonexistent-file.txt', // This will fail
@@ -730,10 +786,8 @@ Content of file[1]
         return 'text';
       });
 
-      const invocation = tool.build({ paths: files });
+      const invocation = tool.build({ include: files });
       await invocation.execute(new AbortController().signal);
-
-      console.log('Execution order:', executionOrder);
 
       // Verify concurrent execution pattern
       // In parallel execution: all "start:" events should come before all "end:" events

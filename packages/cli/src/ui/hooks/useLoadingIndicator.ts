@@ -7,9 +7,32 @@
 import { StreamingState } from '../types.js';
 import { useTimer } from './useTimer.js';
 import { usePhraseCycler } from './usePhraseCycler.js';
-import { useState, useEffect, useRef } from 'react'; // Added useRef
+import { useState, useEffect, useRef } from 'react';
+import {
+  getDisplayString,
+  type RetryAttemptPayload,
+} from '@google/gemini-cli-core';
+import type { LoadingPhrasesMode } from '../../config/settings.js';
 
-export const useLoadingIndicator = (streamingState: StreamingState) => {
+const LOW_VERBOSITY_RETRY_HINT_ATTEMPT_THRESHOLD = 2;
+
+export interface UseLoadingIndicatorProps {
+  streamingState: StreamingState;
+  shouldShowFocusHint: boolean;
+  retryStatus: RetryAttemptPayload | null;
+  loadingPhrasesMode?: LoadingPhrasesMode;
+  customWittyPhrases?: string[];
+  errorVerbosity: 'low' | 'full';
+}
+
+export const useLoadingIndicator = ({
+  streamingState,
+  shouldShowFocusHint,
+  retryStatus,
+  loadingPhrasesMode,
+  customWittyPhrases,
+  errorVerbosity,
+}: UseLoadingIndicatorProps) => {
   const [timerResetKey, setTimerResetKey] = useState(0);
   const isTimerActive = streamingState === StreamingState.Responding;
 
@@ -20,6 +43,9 @@ export const useLoadingIndicator = (streamingState: StreamingState) => {
   const currentLoadingPhrase = usePhraseCycler(
     isPhraseCyclingActive,
     isWaiting,
+    shouldShowFocusHint,
+    loadingPhrasesMode,
+    customWittyPhrases,
   );
 
   const [retainedElapsedTime, setRetainedElapsedTime] = useState(0);
@@ -47,11 +73,19 @@ export const useLoadingIndicator = (streamingState: StreamingState) => {
     prevStreamingStateRef.current = streamingState;
   }, [streamingState, elapsedTimeFromTimer]);
 
+  const retryPhrase = retryStatus
+    ? errorVerbosity === 'low'
+      ? retryStatus.attempt >= LOW_VERBOSITY_RETRY_HINT_ATTEMPT_THRESHOLD
+        ? "This is taking a bit longer, we're still on it."
+        : null
+      : `Trying to reach ${getDisplayString(retryStatus.model)} (Attempt ${retryStatus.attempt + 1}/${retryStatus.maxAttempts})`
+    : null;
+
   return {
     elapsedTime:
       streamingState === StreamingState.WaitingForConfirmation
         ? retainedElapsedTime
         : elapsedTimeFromTimer,
-    currentLoadingPhrase,
+    currentLoadingPhrase: retryPhrase || currentLoadingPhrase,
   };
 };

@@ -6,24 +6,61 @@
 
 import path from 'node:path';
 import picomatch from 'picomatch';
-import type { Ignore } from './ignore.js';
-import { loadIgnoreRules } from './ignore.js';
+import { loadIgnoreRules, type Ignore } from './ignore.js';
 import { ResultCache } from './result-cache.js';
 import { crawl } from './crawler.js';
-import type { FzfResultItem } from 'fzf';
-import { AsyncFzf } from 'fzf';
+import { AsyncFzf, type FzfResultItem } from 'fzf';
 import { unescapePath } from '../paths.js';
+import type { FileDiscoveryService } from '../../services/fileDiscoveryService.js';
+
+// Tiebreaker: Prefers shorter paths.
+const byLengthAsc = (a: { item: string }, b: { item: string }) =>
+  a.item.length - b.item.length;
+
+// Tiebreaker: Prefers matches at the start of the filename (basename prefix).
+const byBasenamePrefix = (
+  a: { item: string; positions: Set<number> },
+  b: { item: string; positions: Set<number> },
+) => {
+  const getBasenameStart = (p: string) => {
+    const trimmed = p.endsWith('/') ? p.slice(0, -1) : p;
+    return Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1;
+  };
+  const aDiff = Math.min(...a.positions) - getBasenameStart(a.item);
+  const bDiff = Math.min(...b.positions) - getBasenameStart(b.item);
+
+  const aIsFilenameMatch = aDiff >= 0;
+  const bIsFilenameMatch = bDiff >= 0;
+
+  if (aIsFilenameMatch && !bIsFilenameMatch) return -1;
+  if (!aIsFilenameMatch && bIsFilenameMatch) return 1;
+  if (aIsFilenameMatch && bIsFilenameMatch) return aDiff - bDiff;
+
+  return 0; // Both are directory matches, let subsequent tiebreakers decide.
+};
+
+// Tiebreaker: Prefers matches closer to the end of the path.
+const byMatchPosFromEnd = (
+  a: { item: string; positions: Set<number> },
+  b: { item: string; positions: Set<number> },
+) => {
+  const maxPosA = Math.max(-1, ...a.positions);
+  const maxPosB = Math.max(-1, ...b.positions);
+  const distA = a.item.length - maxPosA;
+  const distB = b.item.length - maxPosB;
+  return distA - distB;
+};
 
 export interface FileSearchOptions {
   projectRoot: string;
   ignoreDirs: string[];
-  useGitignore: boolean;
-  useGeminiignore: boolean;
+  fileDiscoveryService: FileDiscoveryService;
   cache: boolean;
   cacheTtl: number;
   enableRecursiveFileSearch: boolean;
-  disableFuzzySearch: boolean;
+  enableFuzzySearch: boolean;
   maxDepth?: number;
+  maxFiles?: number;
 }
 
 export class AbortError extends Error {
@@ -100,7 +137,11 @@ class RecursiveFileSearch implements FileSearch {
   constructor(private readonly options: FileSearchOptions) {}
 
   async initialize(): Promise<void> {
-    this.ignore = loadIgnoreRules(this.options);
+    this.ignore = loadIgnoreRules(
+      this.options.fileDiscoveryService,
+      this.options.ignoreDirs,
+    );
+
     this.allFiles = await crawl({
       crawlDirectory: this.options.projectRoot,
       cwd: this.options.projectRoot,
@@ -108,7 +149,9 @@ class RecursiveFileSearch implements FileSearch {
       cache: this.options.cache,
       cacheTtl: this.options.cacheTtl,
       maxDepth: this.options.maxDepth,
+      maxFiles: this.options.maxFiles ?? 20000,
     });
+
     this.buildResultCache();
   }
 
@@ -116,7 +159,11 @@ class RecursiveFileSearch implements FileSearch {
     pattern: string,
     options: SearchOptions = {},
   ): Promise<string[]> {
-    if (!this.resultCache || !this.fzf || !this.ignore) {
+    if (
+      !this.resultCache ||
+      (!this.fzf && this.options.enableFuzzySearch) ||
+      !this.ignore
+    ) {
       throw new Error('Engine not initialized. Call initialize() first.');
     }
 
@@ -124,19 +171,21 @@ class RecursiveFileSearch implements FileSearch {
 
     let filteredCandidates;
     const { files: candidates, isExactMatch } =
-      await this.resultCache!.get(pattern);
+      await this.resultCache.get(pattern);
 
     if (isExactMatch) {
       // Use the cached result.
       filteredCandidates = candidates;
     } else {
       let shouldCache = true;
-      if (pattern.includes('*') || this.options.disableFuzzySearch) {
+      if (pattern.includes('*') || !this.fzf) {
         filteredCandidates = await filter(candidates, pattern, options.signal);
       } else {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         filteredCandidates = await this.fzf
           .find(pattern)
           .then((results: Array<FzfResultItem<string>>) =>
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
             results.map((entry: FzfResultItem<string>) => entry.item),
           )
           .catch(() => {
@@ -146,7 +195,7 @@ class RecursiveFileSearch implements FileSearch {
       }
 
       if (shouldCache) {
-        this.resultCache!.set(pattern, filteredCandidates);
+        this.resultCache.set(pattern, filteredCandidates);
       }
     }
 
@@ -175,12 +224,16 @@ class RecursiveFileSearch implements FileSearch {
 
   private buildResultCache(): void {
     this.resultCache = new ResultCache(this.allFiles);
-    // The v1 algorithm is much faster since it only looks at the first
-    // occurence of the pattern. We use it for search spaces that have >20k
-    // files, because the v2 algorithm is just too slow in those cases.
-    this.fzf = new AsyncFzf(this.allFiles, {
-      fuzzy: this.allFiles.length > 20000 ? 'v1' : 'v2',
-    });
+    if (this.options.enableFuzzySearch) {
+      // The v1 algorithm is much faster since it only looks at the first
+      // occurrence of the pattern. We use it for search spaces that have >20k
+      // files, because the v2 algorithm is just too slow in those cases.
+      this.fzf = new AsyncFzf(this.allFiles, {
+        fuzzy: this.allFiles.length > 20000 ? 'v1' : 'v2',
+        forward: false,
+        tiebreakers: [byBasenamePrefix, byMatchPosFromEnd, byLengthAsc],
+      });
+    }
   }
 }
 
@@ -190,7 +243,10 @@ class DirectoryFileSearch implements FileSearch {
   constructor(private readonly options: FileSearchOptions) {}
 
   async initialize(): Promise<void> {
-    this.ignore = loadIgnoreRules(this.options);
+    this.ignore = loadIgnoreRules(
+      this.options.fileDiscoveryService,
+      this.options.ignoreDirs,
+    );
   }
 
   async search(

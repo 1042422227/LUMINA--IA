@@ -9,13 +9,17 @@ import {
   useEffect,
   useReducer,
   useRef,
-  useTransition,
+  startTransition,
 } from 'react';
 import type { ConsoleMessageItem } from '../types.js';
+import {
+  coreEvents,
+  CoreEvent,
+  type ConsoleLogPayload,
+} from '@google/gemini-cli-core';
 
 export interface UseConsoleMessagesReturn {
   consoleMessages: ConsoleMessageItem[];
-  handleNewMessage: (message: ConsoleMessageItem) => void;
   clearConsoleMessages: () => void;
 }
 
@@ -27,6 +31,7 @@ function consoleMessagesReducer(
   state: ConsoleMessageItem[],
   action: Action,
 ): ConsoleMessageItem[] {
+  const MAX_CONSOLE_MESSAGES = 1000;
   switch (action.type) {
     case 'ADD_MESSAGES': {
       const newMessages = [...state];
@@ -47,6 +52,12 @@ function consoleMessagesReducer(
           newMessages.push({ ...queuedMessage, count: 1 });
         }
       }
+
+      // Limit the number of messages to prevent memory issues
+      if (newMessages.length > MAX_CONSOLE_MESSAGES) {
+        return newMessages.slice(newMessages.length - MAX_CONSOLE_MESSAGES);
+      }
+
       return newMessages;
     }
     case 'CLEAR':
@@ -60,10 +71,11 @@ export function useConsoleMessages(): UseConsoleMessagesReturn {
   const [consoleMessages, dispatch] = useReducer(consoleMessagesReducer, []);
   const messageQueueRef = useRef<ConsoleMessageItem[]>([]);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [, startTransition] = useTransition();
+  const isProcessingRef = useRef(false);
 
   const processQueue = useCallback(() => {
     if (messageQueueRef.current.length > 0) {
+      isProcessingRef.current = true;
       const messagesToProcess = messageQueueRef.current;
       messageQueueRef.current = [];
       startTransition(() => {
@@ -76,14 +88,72 @@ export function useConsoleMessages(): UseConsoleMessagesReturn {
   const handleNewMessage = useCallback(
     (message: ConsoleMessageItem) => {
       messageQueueRef.current.push(message);
-      if (!timeoutRef.current) {
-        // Batch updates using a timeout. 16ms is a reasonable delay to batch
-        // rapid-fire messages without noticeable lag.
-        timeoutRef.current = setTimeout(processQueue, 16);
+      if (!isProcessingRef.current && !timeoutRef.current) {
+        // Batch updates using a timeout. 50ms is a reasonable delay to batch
+        // rapid-fire messages without noticeable lag while avoiding React update
+        // queue flooding.
+        timeoutRef.current = setTimeout(processQueue, 50);
       }
     },
     [processQueue],
   );
+
+  // Once the updated consoleMessages have been committed to the screen,
+  // we can safely process the next batch of queued messages if any exist.
+  // This completely eliminates overlapping concurrent updates to this state.
+  useEffect(() => {
+    isProcessingRef.current = false;
+    if (messageQueueRef.current.length > 0 && !timeoutRef.current) {
+      timeoutRef.current = setTimeout(processQueue, 50);
+    }
+  }, [consoleMessages, processQueue]);
+
+  useEffect(() => {
+    const handleConsoleLog = (payload: ConsoleLogPayload) => {
+      let content = payload.content;
+      const MAX_CONSOLE_MSG_LENGTH = 10000;
+      if (content.length > MAX_CONSOLE_MSG_LENGTH) {
+        content =
+          content.slice(0, MAX_CONSOLE_MSG_LENGTH) +
+          `... [Truncated ${content.length - MAX_CONSOLE_MSG_LENGTH} characters]`;
+      }
+
+      handleNewMessage({
+        type: payload.type,
+        content,
+        count: 1,
+      });
+    };
+
+    const handleOutput = (payload: {
+      isStderr: boolean;
+      chunk: Uint8Array | string;
+    }) => {
+      let content =
+        typeof payload.chunk === 'string'
+          ? payload.chunk
+          : new TextDecoder().decode(payload.chunk);
+
+      const MAX_OUTPUT_CHUNK_LENGTH = 10000;
+      if (content.length > MAX_OUTPUT_CHUNK_LENGTH) {
+        content =
+          content.slice(0, MAX_OUTPUT_CHUNK_LENGTH) +
+          `... [Truncated ${content.length - MAX_OUTPUT_CHUNK_LENGTH} characters]`;
+      }
+
+      // It would be nice if we could show stderr as 'warn' but unfortunately
+      // we log non warning info to stderr before the app starts so that would
+      // be misleading.
+      handleNewMessage({ type: 'log', content, count: 1 });
+    };
+
+    coreEvents.on(CoreEvent.ConsoleLog, handleConsoleLog);
+    coreEvents.on(CoreEvent.Output, handleOutput);
+    return () => {
+      coreEvents.off(CoreEvent.ConsoleLog, handleConsoleLog);
+      coreEvents.off(CoreEvent.Output, handleOutput);
+    };
+  }, [handleNewMessage]);
 
   const clearConsoleMessages = useCallback(() => {
     if (timeoutRef.current) {
@@ -91,6 +161,7 @@ export function useConsoleMessages(): UseConsoleMessagesReturn {
       timeoutRef.current = null;
     }
     messageQueueRef.current = [];
+    isProcessingRef.current = true;
     startTransition(() => {
       dispatch({ type: 'CLEAR' });
     });
@@ -106,5 +177,5 @@ export function useConsoleMessages(): UseConsoleMessagesReturn {
     [],
   );
 
-  return { consoleMessages, handleNewMessage, clearConsoleMessages };
+  return { consoleMessages, clearConsoleMessages };
 }

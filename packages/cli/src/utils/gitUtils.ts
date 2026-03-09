@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { debugLogger } from '@google/gemini-cli-core';
 import { execSync } from 'node:child_process';
 import { ProxyAgent } from 'undici';
 
@@ -24,7 +25,7 @@ export const isGitHubRepository = (): boolean => {
     return pattern.test(remotes);
   } catch (_error) {
     // If any filesystem error occurs, assume not a git repo
-    console.debug(`Failed to get git remote:`, _error);
+    debugLogger.debug(`Failed to get git remote:`, _error);
     return false;
   }
 };
@@ -77,13 +78,18 @@ export const getLatestGitHubRelease = async (
       );
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const releaseTag = (await response.json()).tag_name;
     if (!releaseTag) {
       throw new Error(`Response did not include tag_name field`);
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return releaseTag;
   } catch (_error) {
-    console.debug(`Failed to determine latest run-gemini-cli release:`, _error);
+    debugLogger.debug(
+      `Failed to determine latest run-gemini-cli release:`,
+      _error,
+    );
     throw new Error(
       `Unable to determine the latest run-gemini-cli release on GitHub.`,
     );
@@ -100,17 +106,38 @@ export function getGitHubRepoInfo(): { owner: string; repo: string } {
     encoding: 'utf-8',
   }).trim();
 
-  // Matches either https://github.com/owner/repo.git or git@github.com:owner/repo.git
-  const match = remoteUrl.match(
-    /(?:https?:\/\/|git@)github\.com(?::|\/)([^/]+)\/([^/]+?)(?:\.git)?$/,
-  );
-
-  // If the regex fails match, throw an error.
-  if (!match || !match[1] || !match[2]) {
+  // Handle SCP-style SSH URLs (git@github.com:owner/repo.git)
+  let urlToParse = remoteUrl;
+  if (remoteUrl.startsWith('git@github.com:')) {
+    urlToParse = remoteUrl.replace('git@github.com:', '');
+  } else if (remoteUrl.startsWith('git@')) {
+    // SSH URL for a different provider (GitLab, Bitbucket, etc.)
     throw new Error(
       `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
     );
   }
 
-  return { owner: match[1], repo: match[2] };
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(urlToParse, 'https://github.com');
+  } catch {
+    throw new Error(
+      `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
+    );
+  }
+
+  if (parsedUrl.host !== 'github.com') {
+    throw new Error(
+      `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
+    );
+  }
+
+  const parts = parsedUrl.pathname.split('/').filter((part) => part !== '');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(
+      `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
+    );
+  }
+
+  return { owner: parts[0], repo: parts[1].replace(/\.git$/, '') };
 }

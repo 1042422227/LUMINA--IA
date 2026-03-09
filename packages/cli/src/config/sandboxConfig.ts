@@ -4,24 +4,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { SandboxConfig } from '@google/gemini-cli-core';
-import { FatalSandboxError } from '@google/gemini-cli-core';
+import {
+  getPackageJson,
+  type SandboxConfig,
+  FatalSandboxError,
+} from '@google/gemini-cli-core';
 import commandExists from 'command-exists';
 import * as os from 'node:os';
-import { getPackageJson } from '../utils/package.js';
 import type { Settings } from './settings.js';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // This is a stripped-down version of the CliArgs interface from config.ts
 // to avoid circular dependencies.
 interface SandboxCliArgs {
-  sandbox?: boolean | string;
-  sandboxImage?: string;
+  sandbox?: boolean | string | null;
 }
-
 const VALID_SANDBOX_COMMANDS: ReadonlyArray<SandboxConfig['command']> = [
   'docker',
   'podman',
   'sandbox-exec',
+  'runsc',
+  'lxc',
 ];
 
 function isSandboxCommand(value: string): value is SandboxConfig['command'] {
@@ -29,7 +36,7 @@ function isSandboxCommand(value: string): value is SandboxConfig['command'] {
 }
 
 function getSandboxCommand(
-  sandbox?: boolean | string,
+  sandbox?: boolean | string | null,
 ): SandboxConfig['command'] | '' {
   // If the SANDBOX env var is set, we're already inside the sandbox.
   if (process.env['SANDBOX']) {
@@ -58,17 +65,30 @@ function getSandboxCommand(
         )}`,
       );
     }
-    // confirm that specified command exists
-    if (commandExists.sync(sandbox)) {
-      return sandbox;
+    // runsc (gVisor) is only supported on Linux
+    if (sandbox === 'runsc' && os.platform() !== 'linux') {
+      throw new FatalSandboxError(
+        'gVisor (runsc) sandboxing is only supported on Linux',
+      );
     }
-    throw new FatalSandboxError(
-      `Missing sandbox command '${sandbox}' (from GEMINI_SANDBOX)`,
-    );
+    // confirm that specified command exists
+    if (!commandExists.sync(sandbox)) {
+      throw new FatalSandboxError(
+        `Missing sandbox command '${sandbox}' (from GEMINI_SANDBOX)`,
+      );
+    }
+    // runsc uses Docker with --runtime=runsc; both must be available (prioritize runsc when explicitly chosen)
+    if (sandbox === 'runsc' && !commandExists.sync('docker')) {
+      throw new FatalSandboxError(
+        "runsc (gVisor) requires Docker. Install Docker, or use sandbox: 'docker'.",
+      );
+    }
+    return sandbox;
   }
 
   // look for seatbelt, docker, or podman, in that order
   // for container-based sandboxing, require sandbox to be enabled explicitly
+  // note: runsc is NOT auto-detected, it must be explicitly specified
   if (os.platform() === 'darwin' && commandExists.sync('sandbox-exec')) {
     return 'sandbox-exec';
   } else if (commandExists.sync('docker') && sandbox === true) {
@@ -86,19 +106,22 @@ function getSandboxCommand(
   }
 
   return '';
+  // Note: 'lxc' is intentionally not auto-detected because it requires a
+  // pre-existing, running container managed by the user. Use
+  // GEMINI_SANDBOX=lxc or sandbox: "lxc" in settings to enable it.
 }
 
 export async function loadSandboxConfig(
   settings: Settings,
   argv: SandboxCliArgs,
 ): Promise<SandboxConfig | undefined> {
-  const sandboxOption = argv.sandbox ?? settings.sandbox;
+  const sandboxOption = argv.sandbox ?? settings.tools?.sandbox;
   const command = getSandboxCommand(sandboxOption);
 
-  const packageJson = await getPackageJson();
+  const packageJson = await getPackageJson(__dirname);
   const image =
-    argv.sandboxImage ??
     process.env['GEMINI_SANDBOX_IMAGE'] ??
+    process.env['GEMINI_SANDBOX_IMAGE_DEFAULT'] ??
     packageJson?.config?.sandboxImageUri;
 
   return command && image ? { command, image } : undefined;
