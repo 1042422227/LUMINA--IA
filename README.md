@@ -398,3 +398,29 @@ for removal instructions.
 <p align="center">
   Built with ❤️ by Google and the open source community
 </p>
+readme. mdProject: Gemini CLI Ultra: Luminax Edition
+Tagline: Arquitectura de IA Terminal de Alto Rendimiento con Privacidad Ética y Procesamiento de Ecos de Pensamiento
+
+Stack:
+- Frontend: TypeScript con Ink (React para CLI) para interfaces reactivas y fluidas
+- Backend: Node.js 22 LTS con motor de ejecución asíncrono optimizado
+- Database: SQLite (Local-only) con cifrado AES-256 para persistencia de sesiones de residuo cero
+- Auth: Google OAuth2 PKCE y Vertex AI Workload Identity Federation
+- Deployment: Distribución Multi-canal vía NPM, Homebrew y Docker Sandboxing para ejecución aislada
+
+Features:
+- Procesamiento de contexto masivo de 1M de tokens con gestión de ventana deslizante
+- Arquitectura de Espejo Ético: Procesamiento local sin almacenamiento persistente de intenciones
+- Integración nativa de Model Context Protocol (MCP) para extensibilidad infinita
+- Grounding avanzado con Google Search para validación de hechos en tiempo real
+- Filtro de Frecuencia: Control total del usuario sobre el flujo y cadencia de datos de salida
+
+Architecture:
+Micro-kernel modular con un bus de eventos reactivo que desacopla la lógica de inferencia del Gemini SDK de la ejecución de herramientas del sistema, permitiendo un sandbox de seguridad de nivel enterprise.
+
+Roadmap:
+1. Auditoría profunda del core actual para la eliminación de cuellos de botella en la gestión de flujos (Streams)
+2. Refactorización del sistema de autenticación para soportar protocolos de identidad federada Luminax
+3. Implementación de la capa de Privacidad Ética mediante interceptores de datos que actúan como espejos sin memoria
+4. Integración de un sistema de orquestación para servidores MCP externos con validación de esquemas dinámica
+5. Despliegue de un pipeline CI/CD optimizado con validaciones E2E encadenadas y pruebas de regresión de tokens
